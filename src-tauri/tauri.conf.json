@@ -1,0 +1,34 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "security": {
+      "csp": null
+    },
+    "windows": [
+      {
+        "height": 900,
+        "label": "main",
+        "minHeight": 720,
+        "minWidth": 1000,
+        "resizable": true,
+        "title": "al-iyaal kids media studio",
+        "width": 1320
+      }
+    ]
+  },
+  "build": {
+    "beforeBuildCommand": "bun run build",
+    "beforeDevCommand": "bun run dev",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../dist"
+  },
+  "bundle": {
+    "active": true,
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns"],
+    "resources": ["../python-worker", "../scripts"],
+    "targets": ["dmg"]
+  },
+  "identifier": "com.rhaq.aliyaalkids",
+  "productName": "al-iyaal kids media studio",
+  "version": "0.1.0"
+}

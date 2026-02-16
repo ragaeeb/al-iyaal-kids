@@ -1,0 +1,16 @@
+[project]
+name = "al-iyaal-worker"
+version = "0.1.0"
+description = "Demucs worker sidecar for al-iyaal kids Tauri app"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.4.0"]
+runtime = ["demucs", "torch", "torchaudio", "torchcodec"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+pythonpath = ["src"]

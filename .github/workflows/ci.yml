@@ -24,7 +24,7 @@ jobs:
       - name: Lint
         run: bun run lint
       - name: Rust tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        run: bun run icons:sync && cargo test --manifest-path src-tauri/Cargo.toml
       - name: Python worker tests
         run: PYTHONPATH=python-worker/src uv run --project python-worker --extra dev python -m pytest python-worker/tests
       - name: JS tests with LCOV coverage

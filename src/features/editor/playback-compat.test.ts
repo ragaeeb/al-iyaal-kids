@@ -1,12 +1,14 @@
 import { describe, expect, it } from "bun:test";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { isWebPreviewCompatible } from "@/features/editor/playback-compat";
 
 const SAMPLE_VIDEO_PATH =
   "/Users/rhaq/Movies/al_iyaal/audio_replaced/adventures-from-the-book-of-virtues-season-1-episode-01-work_360.mp4";
-const FFPROBE_FIXTURE_PATH =
-  "/Users/rhaq/workspace/al-iyaal-kids/src/features/editor/fixtures/adventures-work_360.ffprobe.json";
+const FFPROBE_FIXTURE_PATH = fileURLToPath(
+  new URL("./fixtures/adventures-work_360.ffprobe.json", import.meta.url),
+);
 
 type FfprobeReport = {
   streams?: Array<{

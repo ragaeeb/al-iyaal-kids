@@ -11,18 +11,30 @@
 [![Bun](https://img.shields.io/badge/Bun-1.3.9-F9F1E1?logo=bun&logoColor=111111)](https://bun.sh/)
 [![Biome](https://img.shields.io/badge/Biome-2.4.1-60A5FA?logo=biome&logoColor=white)](https://biomejs.dev/)
 
-Tauri v2 desktop app (macOS-first) for Muslim families to remove music from videos locally using Demucs and ffmpeg.
+Tauri v2 desktop app (macOS-first) for Muslim families to process videos locally: remove music, generate subtitles, run profanity/content analysis, and export cleaned cuts.
 
-## What it does (MVP)
+## Current features
 
-- Accepts folders with `.mp4` and `.mov`.
-- Runs sequential batch processing.
-- Extracts vocals stem via Demucs (`--two-stems=vocals`).
-- Replaces video audio with vocals-only output using ffmpeg.
-- Writes outputs to `audio_replaced/` inside the selected folder.
-- Continues on per-file errors.
-- Cancel policy: stop after current file.
-- Keeps originals by default.
+- `Remove Music` tab:
+  - accepts folder input with `.mp4`/`.mov`
+  - extracts vocals via Demucs (`--two-stems=vocals`)
+  - remuxes vocals into video with ffmpeg
+  - writes outputs to `audio_replaced/`
+- `Transcribe` tab:
+  - accepts one or more `.mp4`/`.mov` files, or a folder
+  - generates subtitle sidecars (`.srt`) with local STT (`yap`)
+- `Profanity Detection` tab:
+  - accepts one or more `.srt` files, or a folder
+  - runs local rules + profanity matching
+  - writes sidecars (`.analysis.json`)
+- `Cut Video` tab:
+  - simple player-based cut flow (mark start/end, add ranges, export)
+  - writes cleaned outputs to `video_cleaned/`
+- Shared behavior:
+  - sequential task processing
+  - cancel policy: stop after current file
+  - continue on per-file errors for batch jobs
+  - originals preserved by default
 
 ## Tech stack
 
@@ -31,11 +43,16 @@ Tauri v2 desktop app (macOS-first) for Muslim families to remove music from vide
 - Tailwind CSS v4 + shadcn-style components
 - Bun for package management, scripts, and tests
 - Biome for linting/formatting
-- Python worker sidecar (Demucs + ffmpeg)
+- Python worker sidecar (Demucs + ffmpeg + yap + local moderation)
 
 ## Repository layout
 
-- `src/` React UI, state, transport, and test files
+- `src/` React UI, feature modules, transport, and tests
+  - `src/features/batch/` remove-music domain logic
+  - `src/features/media/` transcription/flag/cut task contracts + state
+  - `src/features/editor/` subtitle/range/playback compatibility helpers
+  - `src/features/moderation/` moderation validation/utilities
+  - `src/components/` tab panels and shared UI components
 - `src-tauri/` Rust Tauri app, commands, worker/runtime orchestration
 - `python-worker/` Python daemon + media pipeline logic + pytest tests
 - `scripts/` bootstrap/check/release/version-sync helper scripts
@@ -66,6 +83,18 @@ bun run lint
 bun run test
 ```
 
+Run a specific integration-style compatibility test (fixture + optional local file probe):
+
+```bash
+bun test src/features/editor/playback-compat.test.ts
+```
+
+Override sample file for local probe:
+
+```bash
+ALIYAAL_TEST_VIDEO_PATH="/absolute/path/to/video.mp4" bun test src/features/editor/playback-compat.test.ts
+```
+
 Run Rust tests only:
 
 ```bash
@@ -92,6 +121,12 @@ If a batch appears stuck, keep the `tauri:dev` terminal open and watch for:
 - worker process exit messages
 - `worker stderr: ...` lines
 
+For media preview issues:
+
+- use `ffprobe` to inspect codecs/pixel format
+- verify local path resolution and webview asset protocol access
+- run `bun test src/features/editor/playback-compat.test.ts` for compatibility checks
+
 ## Runtime notes
 
 - App bootstraps a local Python runtime under app data on first run.
@@ -101,6 +136,7 @@ If a batch appears stuck, keep the `tauri:dev` terminal open and watch for:
 - `AIYAAL_BASE_PYTHON` for venv bootstrap base python
 - `AIYAAL_FFMPEG_PATH` to force ffmpeg binary
 - `AIYAAL_DEMUCS_PATH` to force demucs executable
+- `AIYAAL_YAP_PATH` to force yap executable
 
 ## Release/versioning
 

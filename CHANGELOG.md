@@ -1,3 +1,11 @@
+# [1.1.0](https://github.com/ragaeeb/al-iyaal-kids/compare/v1.0.0...v1.1.0) (2026-02-17)
+
+
+### Features
+
+* **editor:** Add editor ([c15edf0](https://github.com/ragaeeb/al-iyaal-kids/commit/c15edf0500b1fe4535acc6de77de5072e18b04bc))
+* **editor:** Fix build and update docs ([41690b7](https://github.com/ragaeeb/al-iyaal-kids/commit/41690b7f44ec5a8c42c8c18c347c5b910cbb27bd))
+
 # 1.0.0 (2026-02-16)
 
 

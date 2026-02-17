@@ -74,8 +74,18 @@ pub fn run() {
         .manage(AppState::new())
         .invoke_handler(tauri::generate_handler![
             commands::start_batch,
+            commands::start_transcription_batch,
+            commands::start_flag_batch,
+            commands::start_cut_job,
             commands::cancel_batch,
+            commands::cancel_task,
             commands::get_batch_state,
+            commands::get_task_state,
+            commands::list_videos,
+            commands::list_srt_files,
+            commands::get_moderation_settings,
+            commands::save_moderation_settings,
+            commands::read_text_file,
             commands::open_folder_picker,
         ])
         .run(tauri::generate_context!())

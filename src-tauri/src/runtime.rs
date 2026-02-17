@@ -13,6 +13,7 @@ pub struct RuntimePaths {
     pub python_executable: PathBuf,
     pub worker_script: PathBuf,
     pub ffmpeg_executable: PathBuf,
+    pub yap_executable: PathBuf,
 }
 
 pub async fn ensure_runtime_ready(app: &AppHandle) -> Result<RuntimePaths, String> {
@@ -81,10 +82,40 @@ pub async fn ensure_runtime_ready(app: &AppHandle) -> Result<RuntimePaths, Strin
             }
         });
 
+    let yap_executable = env::var("AIYAAL_YAP_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            if let Some(resource_dir) = app.path().resource_dir().ok() {
+                let resource_candidates = [
+                    resource_dir.join("assets/bin/yap.sh"),
+                    resource_dir.join("assets/bin/yap"),
+                ];
+                if let Some(found) = resource_candidates.into_iter().find(|path| path.exists()) {
+                    return found;
+                }
+            }
+
+            let local_candidates = [
+                PathBuf::from("assets/bin/yap.sh"),
+                PathBuf::from("assets/bin/yap"),
+            ];
+            if let Some(found) = local_candidates.into_iter().find(|path| path.exists()) {
+                return found;
+            }
+
+            let bundled_candidates = [runtime_dir.join("bin/yap.sh"), runtime_dir.join("bin/yap")];
+            if let Some(found) = bundled_candidates.into_iter().find(|path| path.exists()) {
+                found
+            } else {
+                PathBuf::from("yap")
+            }
+        });
+
     Ok(RuntimePaths {
         python_executable,
         worker_script,
         ffmpeg_executable,
+        yap_executable,
     })
 }
 

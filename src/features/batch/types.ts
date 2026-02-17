@@ -21,6 +21,7 @@ export type JobRecord = {
   status: JobStatus;
   progressPct: number;
   error?: string;
+  logs?: string[];
 };
 
 export type BatchSummary = {
@@ -72,6 +73,13 @@ export type BatchEvent =
       type: "batch_done";
       batchId: string;
       summary: BatchSummary;
+    }
+  | {
+      type: "job_log";
+      batchId: string;
+      jobId: string;
+      message: string;
+      stream: string;
     }
   | {
       type: "worker_status";

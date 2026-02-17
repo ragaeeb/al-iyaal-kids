@@ -8,13 +8,14 @@ use tokio::{
 };
 
 use crate::{
-    protocol::{parse_worker_event, to_frontend_event, WorkerCommand},
+    protocol::{parse_worker_event, to_frontend_batch_event, to_frontend_task_event, WorkerCommand},
     runtime::ensure_runtime_ready,
     state::AppState,
-    types::{BatchEvent, WorkerStatusKind},
+    types::{BatchEvent, TaskEvent, WorkerStatusKind},
 };
 
 const BATCH_EVENT_NAME: &str = "batch-event";
+const TASK_EVENT_NAME: &str = "task-event";
 
 pub async fn ensure_worker_sender(app: AppHandle, state: AppState) -> Result<crate::state::WorkerSender, String> {
     if let Some(sender) = state.worker_sender().await {
@@ -28,6 +29,11 @@ pub async fn ensure_worker_sender(app: AppHandle, state: AppState) -> Result<cra
         BatchEvent::worker_status(WorkerStatusKind::Starting, "Starting persistent Python worker..."),
     )
     .map_err(|error| format!("Failed to emit worker startup event: {error}"))?;
+    app.emit(
+        TASK_EVENT_NAME,
+        TaskEvent::worker_status(WorkerStatusKind::Starting, "Starting persistent Python worker..."),
+    )
+    .map_err(|error| format!("Failed to emit task startup event: {error}"))?;
 
     let runtime = ensure_runtime_ready(&app).await?;
     let worker_sender = spawn_worker_process(app.clone(), state.clone(), runtime).await?;
@@ -38,6 +44,11 @@ pub async fn ensure_worker_sender(app: AppHandle, state: AppState) -> Result<cra
         BatchEvent::worker_status(WorkerStatusKind::Ready, "Worker ready."),
     )
     .map_err(|error| format!("Failed to emit worker ready event: {error}"))?;
+    app.emit(
+        TASK_EVENT_NAME,
+        TaskEvent::worker_status(WorkerStatusKind::Ready, "Worker ready."),
+    )
+    .map_err(|error| format!("Failed to emit task ready event: {error}"))?;
 
     Ok(worker_sender)
 }
@@ -81,7 +92,8 @@ async fn spawn_worker_process(
         .env("PYTHONPATH", merged_python_path)
         .env("PATH", merged_path)
         .env("AIYAAL_DEMUCS_PATH", demucs_path.to_string_lossy().to_string())
-        .env("AIYAAL_FFMPEG_PATH", runtime.ffmpeg_executable.to_string_lossy().to_string());
+        .env("AIYAAL_FFMPEG_PATH", runtime.ffmpeg_executable.to_string_lossy().to_string())
+        .env("AIYAAL_YAP_PATH", runtime.yap_executable.to_string_lossy().to_string());
 
     let mut child = command.spawn().map_err(|error| {
         format!(
@@ -116,7 +128,11 @@ async fn spawn_worker_process(
                     eprintln!("worker command serialization error: {error}");
                     let _ = app_for_stdin.emit(
                         BATCH_EVENT_NAME,
-                        BatchEvent::worker_status(WorkerStatusKind::Error, error),
+                        BatchEvent::worker_status(WorkerStatusKind::Error, error.clone()),
+                    );
+                    let _ = app_for_stdin.emit(
+                        TASK_EVENT_NAME,
+                        TaskEvent::worker_status(WorkerStatusKind::Error, error),
                     );
                     continue;
                 }
@@ -127,6 +143,13 @@ async fn spawn_worker_process(
                 let _ = app_for_stdin.emit(
                     BATCH_EVENT_NAME,
                     BatchEvent::worker_status(
+                        WorkerStatusKind::Error,
+                        format!("Failed writing to worker stdin: {error}"),
+                    ),
+                );
+                let _ = app_for_stdin.emit(
+                    TASK_EVENT_NAME,
+                    TaskEvent::worker_status(
                         WorkerStatusKind::Error,
                         format!("Failed writing to worker stdin: {error}"),
                     ),
@@ -148,15 +171,22 @@ async fn spawn_worker_process(
                     eprintln!("worker event parse error: {error}; raw_line={line}");
                     let _ = app_for_stdout.emit(
                         BATCH_EVENT_NAME,
-                        BatchEvent::worker_status(WorkerStatusKind::Error, error),
+                        BatchEvent::worker_status(WorkerStatusKind::Error, error.clone()),
+                    );
+                    let _ = app_for_stdout.emit(
+                        TASK_EVENT_NAME,
+                        TaskEvent::worker_status(WorkerStatusKind::Error, error),
                     );
                     continue;
                 }
             };
 
             state_for_stdout.apply_worker_event(&parsed_event).await;
-            if let Some(frontend_event) = to_frontend_event(&parsed_event) {
+            if let Some(frontend_event) = to_frontend_batch_event(&parsed_event) {
                 let _ = app_for_stdout.emit(BATCH_EVENT_NAME, frontend_event);
+            }
+            if let Some(task_event) = to_frontend_task_event(&parsed_event) {
+                let _ = app_for_stdout.emit(TASK_EVENT_NAME, task_event);
             }
         }
     });
@@ -169,6 +199,10 @@ async fn spawn_worker_process(
             let _ = app_for_stderr.emit(
                 BATCH_EVENT_NAME,
                 BatchEvent::worker_status(WorkerStatusKind::Error, format!("worker stderr: {line}")),
+            );
+            let _ = app_for_stderr.emit(
+                TASK_EVENT_NAME,
+                TaskEvent::worker_status(WorkerStatusKind::Error, format!("worker stderr: {line}")),
             );
         }
     });
@@ -188,6 +222,10 @@ async fn spawn_worker_process(
         let _ = app_for_wait.emit(
             BATCH_EVENT_NAME,
             BatchEvent::worker_status(WorkerStatusKind::Error, message),
+        );
+        let _ = app_for_wait.emit(
+            TASK_EVENT_NAME,
+            TaskEvent::worker_status(WorkerStatusKind::Error, "Worker exited unexpectedly."),
         );
     });
 

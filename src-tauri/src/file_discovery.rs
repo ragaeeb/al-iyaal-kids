@@ -3,6 +3,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::types::{SrtListItem, VideoListItem};
+
 pub fn collect_media_files(input_dir: &Path, allowed_extensions: &[String]) -> Result<Vec<PathBuf>, String> {
     if !input_dir.is_dir() {
         return Err(format!("Input path is not a directory: {}", input_dir.display()));
@@ -34,6 +36,68 @@ pub fn collect_media_files(input_dir: &Path, allowed_extensions: &[String]) -> R
 
 pub fn build_output_dir(input_dir: &Path) -> PathBuf {
     input_dir.join("audio_replaced")
+}
+
+pub fn discover_video_items(input_dir: &Path, allowed_extensions: &[String]) -> Result<Vec<VideoListItem>, String> {
+    let files = collect_media_files(input_dir, allowed_extensions)?;
+
+    let mut videos = files
+        .into_iter()
+        .map(|path| {
+            let srt_path = path.with_extension("srt");
+            let analysis_path = path.with_extension("analysis.json");
+            let file_name = path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .map(str::to_string)
+                .unwrap_or_else(|| path.to_string_lossy().to_string());
+
+            VideoListItem {
+                file_name,
+                path: path.to_string_lossy().to_string(),
+                srt_path: srt_path
+                    .exists()
+                    .then(|| srt_path.to_string_lossy().to_string()),
+                analysis_path: analysis_path
+                    .exists()
+                    .then(|| analysis_path.to_string_lossy().to_string()),
+                has_srt: srt_path.exists(),
+                has_analysis: analysis_path.exists(),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    videos.sort_by(|left, right| left.file_name.cmp(&right.file_name));
+    Ok(videos)
+}
+
+pub fn discover_srt_items(input_dir: &Path) -> Result<Vec<SrtListItem>, String> {
+    let allowed_extensions = vec![".srt".to_string()];
+    let files = collect_media_files(input_dir, &allowed_extensions)?;
+
+    let mut srt_files = files
+        .into_iter()
+        .map(|path| {
+            let analysis_path = path.with_extension("analysis.json");
+            let file_name = path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .map(str::to_string)
+                .unwrap_or_else(|| path.to_string_lossy().to_string());
+
+            SrtListItem {
+                file_name,
+                path: path.to_string_lossy().to_string(),
+                analysis_path: analysis_path
+                    .exists()
+                    .then(|| analysis_path.to_string_lossy().to_string()),
+                has_analysis: analysis_path.exists(),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    srt_files.sort_by(|left, right| left.file_name.cmp(&right.file_name));
+    Ok(srt_files)
 }
 
 #[cfg(test)]

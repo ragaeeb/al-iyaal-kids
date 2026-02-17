@@ -12,6 +12,7 @@ dev = [
     { name = "pytest" },
 ]
 runtime = [
+    { name = "better-profanity" },
     { name = "demucs" },
     { name = "torch" },
     { name = "torchaudio" },
@@ -20,6 +21,7 @@ runtime = [
 
 [package.metadata]
 requires-dist = [
+    { name = "better-profanity", marker = "extra == 'runtime'" },
     { name = "demucs", marker = "extra == 'runtime'" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.4.0" },
     { name = "torch", marker = "extra == 'runtime'" },
@@ -33,6 +35,15 @@ name = "antlr4-python3-runtime"
 version = "4.9.3"
 source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/3e/38/7859ff46355f76f8d19459005ca000b6e7012f2f1ca597746cbcd1fbfe5e/antlr4-python3-runtime-4.9.3.tar.gz", hash = "sha256:f224469b4168294902bb1efa80a8bf7855f24c99aef99cbefc1bcd3cce77881b", size = 117034, upload-time = "2021-11-06T17:52:23.524Z" }
+
+[[package]]
+name = "better-profanity"
+version = "0.7.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/b5/4a/52966c1c883819f0b48540312a4a7f63b5c49f4e5b1a10838ae7f06ebb3c/better_profanity-0.7.0.tar.gz", hash = "sha256:8a6fdc8606d7471e7b5f6801917eca98ec211098262e82f62da4f5de3a73145b", size = 29977, upload-time = "2020-11-02T10:49:57.54Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f3/dd/0b074d89e903cc771721cde2c4bf3d8c9d114b5bd791af5c62bcf5fb9459/better_profanity-0.7.0-py3-none-any.whl", hash = "sha256:bd4c529ea6aa2db1aaa50524be1ed14d0fe5c664f1fd88c8bc388c7e9f9f00e8", size = 46104, upload-time = "2020-11-02T10:49:56.066Z" },
+]
 
 [[package]]
 name = "cloudpickle"

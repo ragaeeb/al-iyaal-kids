@@ -74,6 +74,13 @@ const applyBatchEvent = (batch: BatchState, event: BatchEvent): BatchState => {
     };
   }
 
+  if (event.type === "job_log") {
+    return updateJob(batch, event.jobId, (job) => ({
+      ...job,
+      logs: [...(job.logs ?? []), event.message],
+    }));
+  }
+
   return batch;
 };
 

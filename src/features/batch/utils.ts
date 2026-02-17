@@ -35,6 +35,7 @@ export const createQueuedJobs = (inputPaths: string[]): JobRecord[] =>
     fileName: toFileName(inputPath),
     inputPath,
     jobId: toJobId(inputPath),
+    logs: [],
     progressPct: 0,
     status: "queued",
   }));

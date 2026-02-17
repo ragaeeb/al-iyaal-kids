@@ -1,5 +1,6 @@
 # Refresh manually with: uv pip compile pyproject.toml -o requirements.lock.txt
 # Intentionally installed during first-run runtime bootstrap.
+better-profanity
 demucs
 torch
 torchaudio

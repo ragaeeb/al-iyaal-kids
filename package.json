@@ -58,15 +58,17 @@
     "icons:check": "bun run icons:sync && test -f src-tauri/icons/icon.icns",
     "icons:sync": "bun ./scripts/sync-icons.ts",
     "lint": "biome check .",
+    "postinstall": "bun run yap:sync",
     "preview": "vite preview",
     "release": "semantic-release",
     "tauri": "tauri",
-    "tauri:build": "bun run icons:sync && tauri build",
-    "tauri:dev": "bun run icons:sync && tauri dev",
+    "tauri:build": "bun run icons:sync && bun run yap:sync && tauri build",
+    "tauri:dev": "bun run icons:sync && bun run yap:sync && tauri dev",
     "test": "bun test",
     "test:watch": "bun test --watch",
     "typecheck": "tsc --noEmit",
-    "version:sync": "bun ./scripts/sync-version.ts"
+    "version:sync": "bun ./scripts/sync-version.ts",
+    "yap:sync": "./scripts/sync-yap.sh"
   },
   "type": "module",
   "version": "1.0.0"

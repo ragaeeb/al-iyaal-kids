@@ -1,13 +1,17 @@
-import { Clapperboard, Scissors, WandSparkles } from "lucide-react";
-import { PlaceholderPanel } from "@/components/placeholder-panel";
+import { AudioLines, Scissors, ShieldAlert, WandSparkles } from "lucide-react";
+import { ProfanityPanel } from "@/components/profanity-panel";
 import { RemoveMusicPanel } from "@/components/remove-music-panel";
+import { SimpleCutEditorPanel } from "@/components/simple-cut-editor-panel";
+import { TranscribePanel } from "@/components/transcribe-panel";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useBatchController } from "@/features/batch/useBatchController";
+import { useMediaController } from "@/features/media/useMediaController";
 import { brandPalette } from "@/theme/brand";
 import logoPng from "../logo.png";
 
 const App = () => {
   const controller = useBatchController();
+  const mediaController = useMediaController();
   const shellBackground = {
     backgroundImage: `radial-gradient(circle at top left, ${brandPalette.light}, transparent 55%), radial-gradient(circle at 95% 5%, ${brandPalette.muted}55, transparent 45%), linear-gradient(160deg, #fffaf6, #fff6f1 52%, ${brandPalette.light}88)`,
   };
@@ -46,13 +50,17 @@ const App = () => {
               <WandSparkles className="size-4" />
               Remove Music
             </TabsTrigger>
+            <TabsTrigger value="transcribe" className="gap-2">
+              <AudioLines className="size-4" />
+              Transcribe
+            </TabsTrigger>
+            <TabsTrigger value="profanity-detection" className="gap-2">
+              <ShieldAlert className="size-4" />
+              Profanity Detection
+            </TabsTrigger>
             <TabsTrigger value="cut-video" className="gap-2">
               <Scissors className="size-4" />
               Cut Video
-            </TabsTrigger>
-            <TabsTrigger value="more-tools" className="gap-2">
-              <Clapperboard className="size-4" />
-              More Tools
             </TabsTrigger>
           </TabsList>
 
@@ -74,18 +82,16 @@ const App = () => {
             />
           </TabsContent>
 
-          <TabsContent value="cut-video">
-            <PlaceholderPanel
-              title="Video Cutter"
-              description="Upcoming: slice specific segments from source videos post processing."
-            />
+          <TabsContent value="transcribe">
+            <TranscribePanel controller={mediaController} />
           </TabsContent>
 
-          <TabsContent value="more-tools">
-            <PlaceholderPanel
-              title="Additional Tools"
-              description="Upcoming: future tabs for format conversion and extra audio/video utility features."
-            />
+          <TabsContent value="profanity-detection">
+            <ProfanityPanel controller={mediaController} />
+          </TabsContent>
+
+          <TabsContent value="cut-video">
+            <SimpleCutEditorPanel controller={mediaController} />
           </TabsContent>
         </Tabs>
       </section>

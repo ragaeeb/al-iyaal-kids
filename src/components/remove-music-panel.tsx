@@ -166,6 +166,18 @@ const RemoveMusicPanel = ({
                     )}
                   </div>
                   <Progress value={job.progressPct} className="h-2" />
+                  {job.logs && job.logs.length > 0 ? (
+                    <div className="mt-1 max-h-20 overflow-auto rounded bg-[#fff7f1] p-1">
+                      {job.logs.slice(-4).map((line, index) => (
+                        <p
+                          key={`${job.jobId}-log-${index}`}
+                          className="font-mono text-[#6e3933] text-[10px]"
+                        >
+                          {line}
+                        </p>
+                      ))}
+                    </div>
+                  ) : null}
                   {job.error ? <p className="mt-1 text-rose-700 text-xs">{job.error}</p> : null}
                 </div>
               );

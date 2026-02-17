@@ -55,6 +55,19 @@ def run_demucs_command_with_progress(
             break
 
         stderr_chunks.append(chunk)
+        for raw_line in chunk.replace("\r", "\n").split("\n"):
+            line = raw_line.strip()
+            if line:
+                emit(
+                    {
+                        "type": "job_log",
+                        "batchId": batch_id,
+                        "jobId": job_id,
+                        "message": line,
+                        "stream": "stderr",
+                    }
+                )
+
         for match in PROGRESS_PERCENT_RE.findall(chunk):
             percent = max(0, min(100, int(match)))
             mapped_progress = 5 + int(percent * 0.6)
@@ -163,6 +176,15 @@ def process_batch(
         )
 
         output_path = output_dir / input_path.name
+        emit(
+            {
+                "type": "job_log",
+                "batchId": command.batch_id,
+                "jobId": job_id,
+                "message": f"Running ffmpeg remux for {input_path.name}",
+                "stream": "stdout",
+            }
+        )
         try:
             ffmpeg_result = command_runner(
                 build_ffmpeg_command(
@@ -187,6 +209,16 @@ def process_batch(
 
         if ffmpeg_result.returncode != 0:
             failed_count += 1
+            if ffmpeg_result.stderr:
+                emit(
+                    {
+                        "type": "job_log",
+                        "batchId": command.batch_id,
+                        "jobId": job_id,
+                        "message": ffmpeg_result.stderr.strip(),
+                        "stream": "stderr",
+                    }
+                )
             emit(
                 {
                     "type": "job_error",

@@ -2,6 +2,10 @@
   "$schema": "https://schema.tauri.app/config/2",
   "app": {
     "security": {
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["**"]
+      },
       "csp": null
     },
     "windows": [
@@ -25,11 +29,15 @@
   "bundle": {
     "active": true,
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns"],
-    "resources": ["../python-worker", "../scripts"],
+    "resources": [
+      "../python-worker/worker.py",
+      "../python-worker/src",
+      "../python-worker/requirements.lock.txt",
+      "../assets/bin/yap.sh"
+    ],
     "targets": ["dmg"]
   },
   "identifier": "com.rhaq.aliyaalkids",
   "productName": "al-iyaal kids media studio",
   "version": "1.0.0"
 }
-

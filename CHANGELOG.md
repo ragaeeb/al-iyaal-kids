@@ -1,3 +1,10 @@
+# [1.2.0](https://github.com/ragaeeb/al-iyaal-kids/compare/v1.1.0...v1.2.0) (2026-03-09)
+
+
+### Features
+
+* **v1.2:** UI refresh, usability enhancements ([#10](https://github.com/ragaeeb/al-iyaal-kids/issues/10)) ([bb327d9](https://github.com/ragaeeb/al-iyaal-kids/commit/bb327d951dd2ade1b554dc2d5ef107ee47fa85f6))
+
 # [1.1.0](https://github.com/ragaeeb/al-iyaal-kids/compare/v1.0.0...v1.1.0) (2026-02-17)
 
 

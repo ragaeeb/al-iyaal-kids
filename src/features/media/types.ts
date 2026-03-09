@@ -18,6 +18,7 @@ export type TaskJobRecord = {
   progressPct: number;
   error?: string;
   logs: string[];
+  artifacts?: TaskJobArtifacts;
 };
 
 export type TaskState = {
@@ -26,6 +27,7 @@ export type TaskState = {
   status: TaskStatus;
   jobs: TaskJobRecord[];
   summary?: TaskSummary;
+  cancelRequested?: boolean;
 };
 
 export type TaskStartedResponse = {
@@ -45,6 +47,8 @@ export type StartFlagBatchRequest = {
   inputDir?: string;
   inputPaths?: string[];
   allowedExtensions?: Array<".srt">;
+  engine?: ModerationEngine;
+  analysisStrategy?: AnalysisStrategy;
 };
 
 export type CutRange = {
@@ -107,7 +111,14 @@ export type ModerationRule = {
   patterns: string[];
 };
 
+export type ModerationEngine = "blacklist" | "gemini" | "nova_pro";
+export type AnalysisStrategy = "fast" | "deep";
+
 export type ModerationSettings = {
+  engine: ModerationEngine;
+  analysisStrategy: AnalysisStrategy;
+  googleApiKey: string;
+  amazonNovaApiKey: string;
   contentCriteria: string;
   priorityGuidelines: string;
   profanityWords: string[];
@@ -115,11 +126,16 @@ export type ModerationSettings = {
 };
 
 export type AnalysisSidecar = {
-  engine: "local_rules";
+  engine: "local_rules" | "gemini" | "nova_pro";
   flagged: FlaggedSegment[];
   summary: string;
   createdAt: string;
   videoFileName: string;
+};
+
+export type TaskJobArtifacts = {
+  flaggedCount?: number;
+  summary?: string;
 };
 
 export type TaskEvent =
@@ -136,7 +152,7 @@ export type TaskEvent =
       taskKind: TaskKind;
       jobId: string;
       outputPath?: string;
-      artifacts?: unknown;
+      artifacts?: TaskJobArtifacts;
     }
   | {
       type: "job_error";

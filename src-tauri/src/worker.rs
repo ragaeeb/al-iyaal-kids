@@ -8,6 +8,7 @@ use tokio::{
 };
 
 use crate::{
+    analytics,
     protocol::{parse_worker_event, to_frontend_batch_event, to_frontend_task_event, WorkerCommand},
     runtime::ensure_runtime_ready,
     state::AppState,
@@ -165,6 +166,7 @@ async fn spawn_worker_process(
         let mut reader = BufReader::new(stdout).lines();
 
         while let Ok(Some(line)) = reader.next_line().await {
+            eprintln!("worker stdout: {line}");
             let parsed_event = match parse_worker_event(&line) {
                 Ok(event) => event,
                 Err(error) => {
@@ -182,6 +184,29 @@ async fn spawn_worker_process(
             };
 
             state_for_stdout.apply_worker_event(&parsed_event).await;
+            match &parsed_event {
+                crate::protocol::WorkerEvent::BatchDone { batch_id, .. } => {
+                    if let Some(batch) = state_for_stdout.get_batch(batch_id).await {
+                        let started_at = state_for_stdout.take_batch_started_at(batch_id).await;
+                        if let Err(error) =
+                            analytics::record_batch_completion(&app_for_stdout, &batch, started_at)
+                        {
+                            eprintln!("analytics batch record error: {error}");
+                        }
+                    }
+                }
+                crate::protocol::WorkerEvent::TaskDone { task_id, .. } => {
+                    if let Some(task) = state_for_stdout.get_task(task_id).await {
+                        let started_at = state_for_stdout.take_task_started_at(task_id).await;
+                        if let Err(error) =
+                            analytics::record_task_completion(&app_for_stdout, &task, started_at)
+                        {
+                            eprintln!("analytics task record error: {error}");
+                        }
+                    }
+                }
+                _ => {}
+            }
             if let Some(frontend_event) = to_frontend_batch_event(&parsed_event) {
                 let _ = app_for_stdout.emit(BATCH_EVENT_NAME, frontend_event);
             }
@@ -213,19 +238,51 @@ async fn spawn_worker_process(
         let status = child.wait().await;
         state_for_wait.clear_worker_sender().await;
 
-        let message = match status {
-            Ok(exit_status) => format!("Worker process exited unexpectedly: {exit_status}"),
-            Err(error) => format!("Failed waiting on worker process: {error}"),
+        let has_active_tasks = state_for_wait
+            .tasks
+            .lock()
+            .await
+            .values()
+            .any(|task| matches!(task.status, crate::types::TaskStatus::Queued | crate::types::TaskStatus::Running));
+        let has_active_batches = state_for_wait
+            .batches
+            .lock()
+            .await
+            .values()
+            .any(|batch| matches!(batch.status, crate::types::BatchStatus::Queued | crate::types::BatchStatus::Running));
+        let has_active_work = has_active_tasks || has_active_batches;
+
+        let (message, is_error) = match status {
+            Ok(exit_status) if exit_status.success() && !has_active_work => {
+                ("Worker process exited cleanly.".to_string(), false)
+            }
+            Ok(exit_status) if exit_status.success() => (
+                format!("Worker process exited while work was still active: {exit_status}"),
+                true,
+            ),
+            Ok(exit_status) => (format!("Worker process exited unexpectedly: {exit_status}"), true),
+            Err(error) => (format!("Failed waiting on worker process: {error}"), true),
         };
         eprintln!("{message}");
 
+        let batch_status = if is_error {
+            WorkerStatusKind::Error
+        } else {
+            WorkerStatusKind::Ready
+        };
+        let task_status = if is_error {
+            WorkerStatusKind::Error
+        } else {
+            WorkerStatusKind::Ready
+        };
+
         let _ = app_for_wait.emit(
             BATCH_EVENT_NAME,
-            BatchEvent::worker_status(WorkerStatusKind::Error, message),
+            BatchEvent::worker_status(batch_status, message.clone()),
         );
         let _ = app_for_wait.emit(
             TASK_EVENT_NAME,
-            TaskEvent::worker_status(WorkerStatusKind::Error, "Worker exited unexpectedly."),
+            TaskEvent::worker_status(task_status, message.clone()),
         );
     });
 

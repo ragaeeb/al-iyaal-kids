@@ -1,3 +1,4 @@
+mod analytics;
 mod commands;
 mod file_discovery;
 mod ids;
@@ -83,6 +84,7 @@ pub fn run() {
             commands::get_task_state,
             commands::list_videos,
             commands::list_srt_files,
+            commands::get_analytics_snapshot,
             commands::get_moderation_settings,
             commands::save_moderation_settings,
             commands::read_text_file,

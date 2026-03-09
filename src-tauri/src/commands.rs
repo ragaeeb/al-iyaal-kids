@@ -9,17 +9,18 @@ use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use crate::{
+    analytics,
     file_discovery::{build_output_dir, collect_media_files, discover_srt_items, discover_video_items},
     ids::{to_file_name, to_job_id},
     protocol::WorkerCommand,
     state::AppState,
     types::{
-        BatchEvent, BatchStartedResponse, BatchState, BatchStatus, CancelAck, CancelBatchRequest,
-        CancelTaskRequest, CutJobStartedResponse, JobRecord, JobStatus, ListSrtFilesRequest,
-        ListVideosRequest, ModerationRule, ModerationSettings, SaveAck, SrtListItem,
-        StartBatchRequest, StartCutJobRequest, StartFlagBatchRequest, StartTranscriptionBatchRequest,
-        TaskCancelAck, TaskJobRecord, TaskJobStatus, TaskKind, TaskState, TaskStatus, VideoListItem,
-        WorkerStatusKind,
+        AnalyticsSnapshot, BatchEvent, BatchStartedResponse, BatchState, BatchStatus, CancelAck,
+        CancelBatchRequest, CancelTaskRequest, CutJobStartedResponse, JobRecord, JobStatus,
+        ListSrtFilesRequest, ListVideosRequest, ModerationRule, ModerationSettings, SaveAck,
+        SrtListItem, StartBatchRequest, StartCutJobRequest, StartFlagBatchRequest,
+        StartTranscriptionBatchRequest, TaskCancelAck, TaskJobRecord, TaskJobStatus, TaskKind,
+        TaskState, TaskStatus, VideoListItem, WorkerStatusKind,
     },
     worker::ensure_worker_sender,
 };
@@ -128,6 +129,7 @@ fn create_task_jobs(input_paths: &[String]) -> Vec<TaskJobRecord> {
     input_paths
         .iter()
         .map(|input_path| TaskJobRecord {
+            artifacts: None,
             job_id: to_job_id(input_path),
             file_name: to_file_name(input_path),
             input_path: input_path.clone(),
@@ -142,7 +144,11 @@ fn create_task_jobs(input_paths: &[String]) -> Vec<TaskJobRecord> {
 
 fn default_moderation_settings() -> ModerationSettings {
     ModerationSettings {
+        amazon_nova_api_key: String::new(),
+        analysis_strategy: "fast".to_string(),
+        engine: "blacklist".to_string(),
         content_criteria: "1. Adult relationships (kissing, romantic/sexual content, dating)\n2. Bad morals or unethical behavior\n3. Content against Islamic values and aqeedah\n4. Magic, sorcery, or supernatural practices\n5. Music references or musical performances\n6. Violence or frightening content\n7. Inappropriate language or themes".to_string(),
+        google_api_key: String::new(),
         priority_guidelines: "Priority Guidelines:\n- HIGH: Major aqeedah violations, explicit magic/sorcery, sexual content\n- MEDIUM: Offensive language, questionable behavior, moderate violence\n- LOW: Mild concerns, ambiguous references".to_string(),
         profanity_words: Vec::new(),
         rules: vec![
@@ -353,7 +359,13 @@ pub async fn start_flag_batch(
         "No .srt files were selected.",
     )?;
 
-    let settings = read_or_initialize_moderation_settings(&app)?;
+    let mut settings = read_or_initialize_moderation_settings(&app)?;
+    if let Some(engine) = request.engine {
+        settings.engine = engine;
+    }
+    if let Some(analysis_strategy) = request.analysis_strategy {
+        settings.analysis_strategy = analysis_strategy;
+    }
     let task_id = Uuid::new_v4().to_string();
 
     state
@@ -496,6 +508,11 @@ pub async fn list_srt_files(request: ListSrtFilesRequest) -> Result<Vec<SrtListI
 #[tauri::command]
 pub async fn get_moderation_settings(app: AppHandle) -> Result<ModerationSettings, String> {
     read_or_initialize_moderation_settings(&app)
+}
+
+#[tauri::command]
+pub async fn get_analytics_snapshot(app: AppHandle) -> Result<AnalyticsSnapshot, String> {
+    analytics::get_analytics_snapshot(&app)
 }
 
 #[tauri::command]

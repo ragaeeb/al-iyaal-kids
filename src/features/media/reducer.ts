@@ -1,10 +1,13 @@
 import type {
   TaskEvent,
+  TaskJobArtifacts,
   TaskJobRecord,
   TaskKind,
   TaskState,
   VideoListItem,
 } from "@/features/media/types";
+import { toJobArtifacts } from "@/features/moderation/results";
+import { toJobId } from "@/features/shared/job-id";
 
 export type MediaUiState = {
   selectedInputDir: string;
@@ -52,6 +55,10 @@ export type MediaUiAction =
       payload: TaskEvent;
     }
   | {
+      type: "task_cancel_requested";
+      payload: string;
+    }
+  | {
       type: "clear_error";
     };
 
@@ -59,12 +66,6 @@ const toFileName = (path: string) => {
   const segments = path.split("/");
   return segments.at(-1) ?? path;
 };
-
-const toJobId = (path: string) =>
-  path
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/(^-|-$)/g, "");
 
 const createQueuedJobs = (inputPaths: string[]): TaskJobRecord[] =>
   inputPaths.map((inputPath) => ({
@@ -94,12 +95,14 @@ const applyTaskEvent = (task: TaskState, event: TaskEvent): TaskState => {
   }
 
   if (event.type === "job_done") {
+    const artifacts: TaskJobArtifacts | undefined = toJobArtifacts(event.artifacts);
     return {
       ...task,
       jobs: task.jobs.map((job) =>
         job.jobId === event.jobId
           ? {
               ...job,
+              artifacts,
               error: undefined,
               outputPath: event.outputPath,
               progressPct: 100,
@@ -142,6 +145,7 @@ const applyTaskEvent = (task: TaskState, event: TaskEvent): TaskState => {
   if (event.type === "task_done") {
     return {
       ...task,
+      cancelRequested: false,
       jobs: task.jobs.map((job) =>
         job.status === "queued"
           ? {
@@ -218,6 +222,7 @@ export const mediaReducer = (state: MediaUiState, action: MediaUiAction): MediaU
 
   if (action.type === "task_started") {
     const task: TaskState = {
+      cancelRequested: false,
       jobs: createQueuedJobs(action.payload.inputPaths),
       status: "queued",
       taskId: action.payload.taskId,
@@ -230,6 +235,8 @@ export const mediaReducer = (state: MediaUiState, action: MediaUiAction): MediaU
         ...state.tasksById,
         [task.taskId]: task,
       },
+      workerMessage: "Starting worker task...",
+      workerStatus: "starting",
     };
   }
 
@@ -253,6 +260,27 @@ export const mediaReducer = (state: MediaUiState, action: MediaUiAction): MediaU
         ...state.tasksById,
         [task.taskId]: applyTaskEvent(task, action.payload),
       },
+    };
+  }
+
+  if (action.type === "task_cancel_requested") {
+    const task = state.tasksById[action.payload];
+    if (!task) {
+      return state;
+    }
+
+    return {
+      ...state,
+      tasksById: {
+        ...state.tasksById,
+        [task.taskId]: {
+          ...task,
+          cancelRequested: true,
+        },
+      },
+      workerMessage:
+        "Cancellation requested. The worker will stop after the current file finishes.",
+      workerStatus: "starting",
     };
   }
 

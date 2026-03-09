@@ -6,9 +6,10 @@ from typing import Any
 
 from ..filesystem import to_job_id
 from ..models import StartFlagBatchCommand
-from ..moderation import analyze_subtitles
+from ..moderation import analyze_subtitles, analyze_with_llm, describe_llm_request
 from ..subtitles import parse_srt, sidecar_analysis_path, sidecar_srt_path
 from .events import (
+    emit_job_log,
     emit_task_done,
     emit_task_job_done,
     emit_task_job_error,
@@ -20,10 +21,10 @@ ShouldCancel = Callable[[], bool]
 
 
 def _build_analysis_payload(
-    source_path: Path, flagged: list[dict[str, Any]], summary: str
+    source_path: Path, engine: str, flagged: list[dict[str, Any]], summary: str
 ) -> dict[str, Any]:
     return {
-        "engine": "local_rules",
+        "engine": engine,
         "flagged": flagged,
         "summary": summary,
         "createdAt": datetime.now(tz=timezone.utc).isoformat(),
@@ -54,8 +55,16 @@ def process_flag_batch(
         source_path = Path(raw_input_path)
         job_id = to_job_id(raw_input_path)
         srt_path, analysis_path = _resolve_sidecars(source_path)
+        engine = str(command.settings.get("engine", "blacklist")).strip().lower()
 
         emit_task_job_progress(emit, command.task_id, "flag", job_id, 5)
+        emit_job_log(
+            emit,
+            command.task_id,
+            "flag",
+            job_id,
+            f"Starting analysis for {source_path.name} with engine={engine}",
+        )
 
         if not srt_path.exists():
             failed_count += 1
@@ -84,7 +93,29 @@ def process_flag_batch(
         emit_task_job_progress(emit, command.task_id, "flag", job_id, 40)
 
         try:
-            flagged, summary = analyze_subtitles(subtitles, command.settings)
+            if engine == "blacklist":
+                flagged, summary = analyze_subtitles(subtitles, command.settings)
+                analysis_engine = "local_rules"
+            else:
+                request_config = describe_llm_request(command.settings)
+                emit_job_log(
+                    emit,
+                    command.task_id,
+                    "flag",
+                    job_id,
+                    f"Running LLM analysis with engine={request_config.engine} strategy={request_config.strategy}",
+                )
+                emit_job_log(
+                    emit,
+                    command.task_id,
+                    "flag",
+                    job_id,
+                    f"LLM request config: endpoint={request_config.endpoint} model={request_config.model}",
+                )
+                llm_result = analyze_with_llm(subtitles, command.settings, source_path.name)
+                flagged = llm_result.flagged
+                summary = llm_result.summary
+                analysis_engine = llm_result.engine
         except Exception as error:
             failed_count += 1
             emit_task_job_error(
@@ -92,13 +123,20 @@ def process_flag_batch(
                 command.task_id,
                 "flag",
                 job_id,
-                f"Failed during local moderation: {error}",
+                f"Failed during moderation: {error}",
             )
             continue
 
         emit_task_job_progress(emit, command.task_id, "flag", job_id, 80)
+        emit_job_log(
+            emit,
+            command.task_id,
+            "flag",
+            job_id,
+            f"Flagged {len(flagged)} subtitle item(s).",
+        )
 
-        payload = _build_analysis_payload(source_path, flagged, summary)
+        payload = _build_analysis_payload(source_path, analysis_engine, flagged, summary)
         try:
             analysis_path.write_text(
                 json.dumps(payload, separators=(",", ":"), ensure_ascii=False),
@@ -122,8 +160,31 @@ def process_flag_batch(
             "flag",
             job_id,
             output_path=str(analysis_path),
-            artifacts={"flaggedCount": len(flagged), "summary": summary},
+            artifacts={
+                "flaggedCount": len(flagged),
+                "summary": summary,
+            },
         )
+
+        if should_cancel():
+            remaining_count = len(command.input_paths) - index - 1
+            if remaining_count > 0:
+                cancelled_count = remaining_count
+                emit_job_log(
+                    emit,
+                    command.task_id,
+                    "flag",
+                    job_id,
+                    f"Cancellation requested. Skipping the remaining {remaining_count} file(s).",
+                )
+                break
+            emit_job_log(
+                emit,
+                command.task_id,
+                "flag",
+                job_id,
+                "Cancellation requested while the current file was already running. The current file finished because cancel mode is stop-after-current.",
+            )
 
     emit_task_done(
         emit,

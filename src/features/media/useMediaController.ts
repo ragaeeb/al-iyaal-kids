@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useReducer } from "react";
+import { useCallback, useEffect, useMemo, useReducer } from "react";
 
 import { openFolderPicker } from "@/features/batch/transport";
 import { MEDIA_ALLOWED_EXTENSIONS } from "@/features/media/constants";
@@ -13,7 +13,12 @@ import {
   startTranscriptionBatch,
   subscribeToTaskEvents,
 } from "@/features/media/transport";
-import type { CutRange, ModerationSettings } from "@/features/media/types";
+import type {
+  AnalysisStrategy,
+  CutRange,
+  ModerationEngine,
+  ModerationSettings,
+} from "@/features/media/types";
 
 export const useMediaController = () => {
   const [state, dispatch] = useReducer(mediaReducer, undefined, createInitialMediaUiState);
@@ -116,14 +121,24 @@ export const useMediaController = () => {
     }
   };
 
-  const startFlagging = async () => {
-    await startFlaggingForPaths([]);
+  const startFlagging = async (
+    overrides?: Partial<Pick<ModerationSettings, "analysisStrategy" | "engine">>,
+  ) => {
+    await startFlaggingForPaths([], overrides);
   };
 
-  const startFlaggingForPaths = async (inputPaths: string[]) => {
+  const startFlaggingForPaths = async (
+    inputPaths: string[],
+    overrides?: {
+      engine?: ModerationEngine;
+      analysisStrategy?: AnalysisStrategy;
+    },
+  ) => {
     try {
       const response = await startFlagBatch({
         allowedExtensions: [".srt"],
+        analysisStrategy: overrides?.analysisStrategy,
+        engine: overrides?.engine,
         inputDir: inputPaths.length === 0 ? state.selectedInputDir : undefined,
         inputPaths: inputPaths.length > 0 ? inputPaths : undefined,
       });
@@ -169,14 +184,22 @@ export const useMediaController = () => {
     }
   };
 
-  const cancelActiveTask = async () => {
-    if (!state.activeTaskId) {
+  const cancelTaskById = async (taskId: string | null) => {
+    if (!taskId) {
       return;
     }
     await cancelTask({
       mode: "stop_after_current",
-      taskId: state.activeTaskId,
+      taskId,
     });
+    dispatch({
+      payload: taskId,
+      type: "task_cancel_requested",
+    });
+  };
+
+  const cancelActiveTask = async () => {
+    await cancelTaskById(state.activeTaskId);
   };
 
   const selectVideo = (path: string | null) => {
@@ -186,8 +209,11 @@ export const useMediaController = () => {
     });
   };
 
-  const loadSettings = async () => getModerationSettings();
-  const saveSettings = async (settings: ModerationSettings) => saveModerationSettings(settings);
+  const loadSettings = useCallback(async () => getModerationSettings(), []);
+  const saveSettings = useCallback(
+    async (settings: ModerationSettings) => saveModerationSettings(settings),
+    [],
+  );
 
   const activeTask = useMemo(
     () => (state.activeTaskId ? state.tasksById[state.activeTaskId] : null),
@@ -197,6 +223,7 @@ export const useMediaController = () => {
   return {
     activeTask,
     cancelActiveTask,
+    cancelTaskById,
     chooseInputDir,
     clearError: () =>
       dispatch({

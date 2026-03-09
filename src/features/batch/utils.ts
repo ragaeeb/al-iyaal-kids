@@ -5,6 +5,7 @@ import type {
   StartBatchRequest,
   SupportedExtension,
 } from "@/features/batch/types";
+import { toJobId } from "@/features/shared/job-id";
 
 const normalizePath = (value: string) => value.trim();
 
@@ -18,12 +19,6 @@ export const buildStartBatchRequest = (inputDir: string): StartBatchRequest => (
   inputDir: normalizePath(inputDir),
   outputDirMode: "audio_replaced_default",
 });
-
-export const toJobId = (inputPath: string) =>
-  inputPath
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/(^-|-$)/g, "");
 
 export const toFileName = (path: string) => {
   const segments = path.split("/");

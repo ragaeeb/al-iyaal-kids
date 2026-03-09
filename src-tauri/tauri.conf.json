@@ -15,14 +15,14 @@
         "minHeight": 720,
         "minWidth": 1000,
         "resizable": true,
-        "title": "al-iyaal kids media studio",
+        "title": "al-Iyaal Kids",
         "width": 1320
       }
     ]
   },
   "build": {
-    "beforeBuildCommand": "bun run build",
-    "beforeDevCommand": "bun run dev",
+    "beforeBuildCommand": "bun run web:build",
+    "beforeDevCommand": "bun run web:dev",
     "devUrl": "http://localhost:1420",
     "frontendDist": "../dist"
   },
@@ -38,7 +38,6 @@
     "targets": ["dmg"]
   },
   "identifier": "com.rhaq.aliyaalkids",
-  "productName": "al-iyaal kids media studio",
+  "productName": "al-Iyaal Kids",
   "version": "1.1.0"
 }
-

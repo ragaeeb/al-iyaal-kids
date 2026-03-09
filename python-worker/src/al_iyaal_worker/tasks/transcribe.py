@@ -60,12 +60,26 @@ def process_transcription_batch(
         video_path = Path(raw_video_path)
         job_id = to_job_id(raw_video_path)
         srt_path = sidecar_srt_path(video_path)
+        emit_job_log(
+            emit,
+            command.task_id,
+            "transcription",
+            job_id,
+            f"Starting transcription for {video_path.name}",
+        )
         emit_task_job_progress(emit, command.task_id, "transcription", job_id, 3)
 
         transcribe_command = build_transcribe_command(
             yap_path=yap_path,
             video_path=video_path,
             output_srt_path=srt_path,
+        )
+        emit_job_log(
+            emit,
+            command.task_id,
+            "transcription",
+            job_id,
+            f"Command: {' '.join(str(part) for part in transcribe_command)}",
         )
 
         try:
@@ -116,6 +130,13 @@ def process_transcription_batch(
                     )
 
         return_code = process.wait()
+        emit_job_log(
+            emit,
+            command.task_id,
+            "transcription",
+            job_id,
+            f"Transcription process exited with code {return_code}",
+        )
         if return_code != 0:
             failed_count += 1
             emit_task_job_error(
@@ -139,6 +160,13 @@ def process_transcription_batch(
             continue
 
         ok_count += 1
+        emit_job_log(
+            emit,
+            command.task_id,
+            "transcription",
+            job_id,
+            f"Transcript written to {srt_path}",
+        )
         emit_task_job_done(
             emit,
             command.task_id,

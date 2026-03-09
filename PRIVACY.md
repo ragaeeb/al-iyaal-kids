@@ -2,7 +2,7 @@
 
 Last updated: February 16, 2026
 
-`al-Iyāl Kids Media Studio` is a local-first desktop app.
+`al-Iyaal Kids` is a local-first desktop app.
 
 ## What we collect
 

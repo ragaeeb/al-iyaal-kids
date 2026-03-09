@@ -6,8 +6,8 @@ import {
   createQueuedJobs,
   isSupportedVideoPath,
   toAllowedExtensions,
-  toJobId,
 } from "@/features/batch/utils";
+import { toJobId } from "@/features/shared/job-id";
 
 describe("batch utils", () => {
   it("should build a start batch request with canonical defaults", () => {

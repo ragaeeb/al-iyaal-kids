@@ -26,9 +26,14 @@ describe("mediaReducer", () => {
 
     expect(running.tasksById["task-1"]?.jobs[0]?.status).toBe("running");
     expect(running.tasksById["task-1"]?.jobs[0]?.progressPct).toBe(27);
+    expect(started.workerStatus).toBe("starting");
+    expect(started.workerMessage).toBe("Starting worker task...");
 
     const completed = mediaReducer(running, {
       payload: {
+        artifacts: {
+          summary: "Transcript written.",
+        },
         jobId: "tmp-clip-mp4",
         outputPath: "/tmp/clip.srt",
         taskId: "task-1",
@@ -39,6 +44,7 @@ describe("mediaReducer", () => {
     });
     expect(completed.tasksById["task-1"]?.jobs[0]?.status).toBe("completed");
     expect(completed.tasksById["task-1"]?.jobs[0]?.outputPath).toBe("/tmp/clip.srt");
+    expect(completed.tasksById["task-1"]?.jobs[0]?.artifacts?.summary).toBe("Transcript written.");
   });
 
   it("should keep remove-music and editor task states isolated", () => {

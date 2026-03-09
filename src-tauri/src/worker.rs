@@ -8,6 +8,7 @@ use tokio::{
 };
 
 use crate::{
+    analytics,
     protocol::{parse_worker_event, to_frontend_batch_event, to_frontend_task_event, WorkerCommand},
     runtime::ensure_runtime_ready,
     state::AppState,
@@ -16,6 +17,13 @@ use crate::{
 
 const BATCH_EVENT_NAME: &str = "batch-event";
 const TASK_EVENT_NAME: &str = "task-event";
+
+fn is_worker_stderr_error(line: &str) -> bool {
+    let normalized = line.trim().to_ascii_lowercase();
+    ["traceback", "error", "exception", "failed", "fatal", "panic"]
+        .iter()
+        .any(|token| normalized.contains(token))
+}
 
 pub async fn ensure_worker_sender(app: AppHandle, state: AppState) -> Result<crate::state::WorkerSender, String> {
     if let Some(sender) = state.worker_sender().await {
@@ -165,6 +173,7 @@ async fn spawn_worker_process(
         let mut reader = BufReader::new(stdout).lines();
 
         while let Ok(Some(line)) = reader.next_line().await {
+            eprintln!("worker stdout: {line}");
             let parsed_event = match parse_worker_event(&line) {
                 Ok(event) => event,
                 Err(error) => {
@@ -182,6 +191,29 @@ async fn spawn_worker_process(
             };
 
             state_for_stdout.apply_worker_event(&parsed_event).await;
+            match &parsed_event {
+                crate::protocol::WorkerEvent::BatchDone { batch_id, .. } => {
+                    if let Some(batch) = state_for_stdout.get_batch(batch_id).await {
+                        let started_at = state_for_stdout.take_batch_started_at(batch_id).await;
+                        if let Err(error) =
+                            analytics::record_batch_completion(&app_for_stdout, &batch, started_at)
+                        {
+                            eprintln!("analytics batch record error: {error}");
+                        }
+                    }
+                }
+                crate::protocol::WorkerEvent::TaskDone { task_id, .. } => {
+                    if let Some(task) = state_for_stdout.get_task(task_id).await {
+                        let started_at = state_for_stdout.take_task_started_at(task_id).await;
+                        if let Err(error) =
+                            analytics::record_task_completion(&app_for_stdout, &task, started_at)
+                        {
+                            eprintln!("analytics task record error: {error}");
+                        }
+                    }
+                }
+                _ => {}
+            }
             if let Some(frontend_event) = to_frontend_batch_event(&parsed_event) {
                 let _ = app_for_stdout.emit(BATCH_EVENT_NAME, frontend_event);
             }
@@ -196,6 +228,9 @@ async fn spawn_worker_process(
         let mut reader = BufReader::new(stderr).lines();
         while let Ok(Some(line)) = reader.next_line().await {
             eprintln!("worker stderr: {line}");
+            if !is_worker_stderr_error(&line) {
+                continue;
+            }
             let _ = app_for_stderr.emit(
                 BATCH_EVENT_NAME,
                 BatchEvent::worker_status(WorkerStatusKind::Error, format!("worker stderr: {line}")),
@@ -213,21 +248,70 @@ async fn spawn_worker_process(
         let status = child.wait().await;
         state_for_wait.clear_worker_sender().await;
 
-        let message = match status {
-            Ok(exit_status) => format!("Worker process exited unexpectedly: {exit_status}"),
-            Err(error) => format!("Failed waiting on worker process: {error}"),
+        let has_active_tasks = state_for_wait
+            .tasks
+            .lock()
+            .await
+            .values()
+            .any(|task| matches!(task.status, crate::types::TaskStatus::Queued | crate::types::TaskStatus::Running));
+        let has_active_batches = state_for_wait
+            .batches
+            .lock()
+            .await
+            .values()
+            .any(|batch| matches!(batch.status, crate::types::BatchStatus::Queued | crate::types::BatchStatus::Running));
+        let has_active_work = has_active_tasks || has_active_batches;
+
+        let (message, is_error) = match status {
+            Ok(exit_status) if exit_status.success() && !has_active_work => {
+                ("Worker process exited cleanly.".to_string(), false)
+            }
+            Ok(exit_status) if exit_status.success() => (
+                format!("Worker process exited while work was still active: {exit_status}"),
+                true,
+            ),
+            Ok(exit_status) => (format!("Worker process exited unexpectedly: {exit_status}"), true),
+            Err(error) => (format!("Failed waiting on worker process: {error}"), true),
         };
         eprintln!("{message}");
 
+        let batch_status = if is_error {
+            WorkerStatusKind::Error
+        } else {
+            WorkerStatusKind::Stopped
+        };
+        let task_status = if is_error {
+            WorkerStatusKind::Error
+        } else {
+            WorkerStatusKind::Stopped
+        };
+
         let _ = app_for_wait.emit(
             BATCH_EVENT_NAME,
-            BatchEvent::worker_status(WorkerStatusKind::Error, message),
+            BatchEvent::worker_status(batch_status, message.clone()),
         );
         let _ = app_for_wait.emit(
             TASK_EVENT_NAME,
-            TaskEvent::worker_status(WorkerStatusKind::Error, "Worker exited unexpectedly."),
+            TaskEvent::worker_status(task_status, message.clone()),
         );
     });
 
     Ok(tx)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_worker_stderr_error;
+
+    #[test]
+    fn should_treat_tracebacks_as_worker_errors() {
+        assert!(is_worker_stderr_error("Traceback (most recent call last):"));
+        assert!(is_worker_stderr_error("demucs failed with exit code 1"));
+    }
+
+    #[test]
+    fn should_ignore_informational_worker_stderr_lines() {
+        assert!(!is_worker_stderr_error("Using cache found in /Users/test/.cache"));
+        assert!(!is_worker_stderr_error("UserWarning: This path is deprecated."));
+    }
 }

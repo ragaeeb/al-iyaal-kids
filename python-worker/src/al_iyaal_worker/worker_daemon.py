@@ -79,7 +79,7 @@ class WorkerDaemon:
         thread = threading.Thread(
             target=self._run_batch,
             args=(command,),
-            daemon=True,
+            daemon=False,
             name=f"batch-{command.batch_id}",
         )
         thread.start()
@@ -96,11 +96,14 @@ class WorkerDaemon:
         ):
             return
 
-        self._emit_status("starting", f"Running transcription task {command.task_id}.")
+        self._emit_status(
+            "starting",
+            f"Received transcription task {command.task_id} with {len(command.input_paths)} file(s).",
+        )
         thread = threading.Thread(
             target=self._run_transcription_batch,
             args=(command,),
-            daemon=True,
+            daemon=False,
             name=f"transcription-{command.task_id}",
         )
         thread.start()
@@ -121,7 +124,7 @@ class WorkerDaemon:
         thread = threading.Thread(
             target=self._run_flag_batch,
             args=(command,),
-            daemon=True,
+            daemon=False,
             name=f"flag-{command.task_id}",
         )
         thread.start()
@@ -142,7 +145,7 @@ class WorkerDaemon:
         thread = threading.Thread(
             target=self._run_cut_job,
             args=(command,),
-            daemon=True,
+            daemon=False,
             name=f"cut-{command.task_id}",
         )
         thread.start()

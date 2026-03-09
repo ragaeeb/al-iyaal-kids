@@ -1,4 +1,6 @@
-from al_iyaal_worker.tasks.transcribe import parse_yap_progress_line
+from pathlib import Path
+
+from al_iyaal_worker.tasks.transcribe import _sanitize_command_preview, parse_yap_progress_line
 
 
 def test_should_parse_yap_progress_line() -> None:
@@ -14,3 +16,25 @@ def test_should_map_success_line_to_100_percent() -> None:
 def test_should_return_none_for_non_progress_line() -> None:
     progress = parse_yap_progress_line("random log line")
     assert progress is None
+
+
+def test_should_redact_local_paths_from_command_preview() -> None:
+    video_path = Path("/Users/example/Movies/sample.mp4")
+    srt_path = Path("/Users/example/Movies/sample.srt")
+
+    preview = _sanitize_command_preview(
+        [
+            "yap",
+            "transcribe",
+            str(video_path),
+            "--srt",
+            "-o",
+            str(srt_path),
+        ],
+        video_path,
+        srt_path,
+    )
+
+    assert "/Users/example" not in preview
+    assert "sample.mp4" in preview
+    assert "sample.srt" in preview

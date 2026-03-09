@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useReducer } from "react";
+import { useEffect, useReducer } from "react";
 
 import { openFolderPicker } from "@/features/batch/transport";
 import { MEDIA_ALLOWED_EXTENSIONS } from "@/features/media/constants";
@@ -13,7 +13,12 @@ import {
   startTranscriptionBatch,
   subscribeToTaskEvents,
 } from "@/features/media/transport";
-import type { CutRange, ModerationSettings } from "@/features/media/types";
+import type {
+  AnalysisStrategy,
+  CutRange,
+  ModerationEngine,
+  ModerationSettings,
+} from "@/features/media/types";
 
 export const useMediaController = () => {
   const [state, dispatch] = useReducer(mediaReducer, undefined, createInitialMediaUiState);
@@ -111,19 +116,29 @@ export const useMediaController = () => {
     } catch (error: unknown) {
       dispatch({
         payload: error instanceof Error ? error.message : "Failed starting transcription batch.",
-        type: "load_videos_error",
+        type: "task_start_error",
       });
     }
   };
 
-  const startFlagging = async () => {
-    await startFlaggingForPaths([]);
+  const startFlagging = async (
+    overrides?: Partial<Pick<ModerationSettings, "analysisStrategy" | "engine">>,
+  ) => {
+    await startFlaggingForPaths([], overrides);
   };
 
-  const startFlaggingForPaths = async (inputPaths: string[]) => {
+  const startFlaggingForPaths = async (
+    inputPaths: string[],
+    overrides?: {
+      engine?: ModerationEngine;
+      analysisStrategy?: AnalysisStrategy;
+    },
+  ) => {
     try {
       const response = await startFlagBatch({
         allowedExtensions: [".srt"],
+        analysisStrategy: overrides?.analysisStrategy,
+        engine: overrides?.engine,
         inputDir: inputPaths.length === 0 ? state.selectedInputDir : undefined,
         inputPaths: inputPaths.length > 0 ? inputPaths : undefined,
       });
@@ -138,7 +153,7 @@ export const useMediaController = () => {
     } catch (error: unknown) {
       dispatch({
         payload: error instanceof Error ? error.message : "Failed starting flag batch.",
-        type: "load_videos_error",
+        type: "task_start_error",
       });
     }
   };
@@ -163,20 +178,35 @@ export const useMediaController = () => {
     } catch (error: unknown) {
       dispatch({
         payload: error instanceof Error ? error.message : "Failed starting cut task.",
-        type: "load_videos_error",
+        type: "task_start_error",
       });
       return null;
     }
   };
 
-  const cancelActiveTask = async () => {
-    if (!state.activeTaskId) {
+  const cancelTaskById = async (taskId: string | null) => {
+    if (!taskId) {
       return;
     }
-    await cancelTask({
-      mode: "stop_after_current",
-      taskId: state.activeTaskId,
-    });
+    try {
+      await cancelTask({
+        mode: "stop_after_current",
+        taskId,
+      });
+      dispatch({
+        payload: taskId,
+        type: "task_cancel_requested",
+      });
+    } catch (error: unknown) {
+      dispatch({
+        payload: error instanceof Error ? error.message : "Failed requesting task cancellation.",
+        type: "task_start_error",
+      });
+    }
+  };
+
+  const cancelActiveTask = async () => {
+    await cancelTaskById(state.activeTaskId);
   };
 
   const selectVideo = (path: string | null) => {
@@ -188,15 +218,12 @@ export const useMediaController = () => {
 
   const loadSettings = async () => getModerationSettings();
   const saveSettings = async (settings: ModerationSettings) => saveModerationSettings(settings);
-
-  const activeTask = useMemo(
-    () => (state.activeTaskId ? state.tasksById[state.activeTaskId] : null),
-    [state.activeTaskId, state.tasksById],
-  );
+  const activeTask = state.activeTaskId ? state.tasksById[state.activeTaskId] : null;
 
   return {
     activeTask,
     cancelActiveTask,
+    cancelTaskById,
     chooseInputDir,
     clearError: () =>
       dispatch({

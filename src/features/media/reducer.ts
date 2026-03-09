@@ -1,10 +1,14 @@
+import { appendBoundedLogLine } from "@/features/media/logs";
 import type {
   TaskEvent,
+  TaskJobArtifacts,
   TaskJobRecord,
   TaskKind,
   TaskState,
   VideoListItem,
 } from "@/features/media/types";
+import { toJobArtifacts } from "@/features/moderation/results";
+import { toJobId } from "@/features/shared/job-id";
 
 export type MediaUiState = {
   selectedInputDir: string;
@@ -13,7 +17,7 @@ export type MediaUiState = {
   activeTaskId: string | null;
   tasksById: Record<string, TaskState>;
   selectedVideoPath: string | null;
-  workerStatus: "idle" | "starting" | "ready" | "error";
+  workerStatus: "idle" | "starting" | "ready" | "stopped" | "error";
   workerMessage: string;
   errorMessage: string | null;
   removeMusicSnapshot: Record<string, string>;
@@ -52,6 +56,14 @@ export type MediaUiAction =
       payload: TaskEvent;
     }
   | {
+      type: "task_cancel_requested";
+      payload: string;
+    }
+  | {
+      type: "task_start_error";
+      payload: string;
+    }
+  | {
       type: "clear_error";
     };
 
@@ -59,12 +71,6 @@ const toFileName = (path: string) => {
   const segments = path.split("/");
   return segments.at(-1) ?? path;
 };
-
-const toJobId = (path: string) =>
-  path
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/(^-|-$)/g, "");
 
 const createQueuedJobs = (inputPaths: string[]): TaskJobRecord[] =>
   inputPaths.map((inputPath) => ({
@@ -94,12 +100,14 @@ const applyTaskEvent = (task: TaskState, event: TaskEvent): TaskState => {
   }
 
   if (event.type === "job_done") {
+    const artifacts: TaskJobArtifacts | undefined = toJobArtifacts(event.artifacts);
     return {
       ...task,
       jobs: task.jobs.map((job) =>
         job.jobId === event.jobId
           ? {
               ...job,
+              artifacts,
               error: undefined,
               outputPath: event.outputPath,
               progressPct: 100,
@@ -132,7 +140,7 @@ const applyTaskEvent = (task: TaskState, event: TaskEvent): TaskState => {
         job.jobId === event.jobId
           ? {
               ...job,
-              logs: [...job.logs, event.message],
+              logs: appendBoundedLogLine(job.logs, event.message),
             }
           : job,
       ),
@@ -142,6 +150,7 @@ const applyTaskEvent = (task: TaskState, event: TaskEvent): TaskState => {
   if (event.type === "task_done") {
     return {
       ...task,
+      cancelRequested: false,
       jobs: task.jobs.map((job) =>
         job.status === "queued"
           ? {
@@ -177,14 +186,13 @@ export const createInitialMediaUiState = (): MediaUiState => ({
   workerStatus: "idle",
 });
 
-export const mediaReducer = (state: MediaUiState, action: MediaUiAction): MediaUiState => {
-  if (action.type === "set_selected_input_dir") {
-    return {
-      ...state,
-      selectedInputDir: action.payload,
-    };
-  }
-
+const handleVideoLoadingAction = (
+  state: MediaUiState,
+  action: Extract<
+    MediaUiAction,
+    { type: "load_videos_request" | "load_videos_success" | "load_videos_error" }
+  >,
+): MediaUiState => {
   if (action.type === "load_videos_request") {
     return {
       ...state,
@@ -201,12 +209,27 @@ export const mediaReducer = (state: MediaUiState, action: MediaUiAction): MediaU
     };
   }
 
-  if (action.type === "load_videos_error") {
+  return {
+    ...state,
+    errorMessage: action.payload,
+    isLoadingVideos: false,
+  };
+};
+
+export const mediaReducer = (state: MediaUiState, action: MediaUiAction): MediaUiState => {
+  if (action.type === "set_selected_input_dir") {
     return {
       ...state,
-      errorMessage: action.payload,
-      isLoadingVideos: false,
+      selectedInputDir: action.payload,
     };
+  }
+
+  if (
+    action.type === "load_videos_request" ||
+    action.type === "load_videos_success" ||
+    action.type === "load_videos_error"
+  ) {
+    return handleVideoLoadingAction(state, action);
   }
 
   if (action.type === "select_video") {
@@ -218,6 +241,7 @@ export const mediaReducer = (state: MediaUiState, action: MediaUiAction): MediaU
 
   if (action.type === "task_started") {
     const task: TaskState = {
+      cancelRequested: false,
       jobs: createQueuedJobs(action.payload.inputPaths),
       status: "queued",
       taskId: action.payload.taskId,
@@ -230,6 +254,8 @@ export const mediaReducer = (state: MediaUiState, action: MediaUiAction): MediaU
         ...state.tasksById,
         [task.taskId]: task,
       },
+      workerMessage: "Starting worker task...",
+      workerStatus: "starting",
     };
   }
 
@@ -253,6 +279,34 @@ export const mediaReducer = (state: MediaUiState, action: MediaUiAction): MediaU
         ...state.tasksById,
         [task.taskId]: applyTaskEvent(task, action.payload),
       },
+    };
+  }
+
+  if (action.type === "task_cancel_requested") {
+    const task = state.tasksById[action.payload];
+    if (!task) {
+      return state;
+    }
+
+    return {
+      ...state,
+      tasksById: {
+        ...state.tasksById,
+        [task.taskId]: {
+          ...task,
+          cancelRequested: true,
+        },
+      },
+      workerMessage:
+        "Cancellation requested. The worker will stop after the current file finishes.",
+      workerStatus: state.workerStatus,
+    };
+  }
+
+  if (action.type === "task_start_error") {
+    return {
+      ...state,
+      errorMessage: action.payload,
     };
   }
 

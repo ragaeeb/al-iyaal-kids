@@ -132,10 +132,16 @@ def test_should_generate_concat_file_content() -> None:
     assert content == "file '/tmp/slice-0.mp4'\nfile '/tmp/slice-1.mp4'"
 
 
+def test_should_escape_unsafe_paths_in_concat_file_content() -> None:
+    content = generate_concat_file_content([Path("/tmp/child's clip.mp4")])
+
+    assert content == "file '/tmp/child'\\''s clip.mp4'"
+
+
 def test_should_build_video_cleaned_output_path(tmp_path: Path) -> None:
     video_path = tmp_path / "clip.mov"
     video_path.write_text("data")
 
     output_path = build_video_cleaned_output_path(video_path)
     assert output_path == tmp_path / "video_cleaned" / "clip.mov"
-    assert output_path.parent.exists()
+    assert not output_path.parent.exists()

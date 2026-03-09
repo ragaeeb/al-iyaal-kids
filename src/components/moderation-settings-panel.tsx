@@ -1,8 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import type { ModerationSettings } from "@/features/media/types";
 import { isValidModerationSettings } from "@/features/moderation/validation";
@@ -11,6 +10,9 @@ type ModerationSettingsPanelProps = {
   onLoad: () => Promise<ModerationSettings>;
   onSave: (settings: ModerationSettings) => Promise<{ success: boolean }>;
 };
+
+const textareaClassName =
+  "min-h-24 w-full rounded-[18px] border border-[#d9b7a5] bg-white px-4 py-3 text-sm text-[#4f1f1a] shadow-[inset_0_1px_0_rgba(255,255,255,0.7)] outline-none transition focus:border-[#88322d] focus:ring-[3px] focus:ring-[#c57267]/25";
 
 const toLines = (values: string[]) => values.join("\n");
 const fromLines = (value: string) =>
@@ -24,12 +26,14 @@ const ModerationSettingsPanel = ({ onLoad, onSave }: ModerationSettingsPanelProp
   const [rulesJson, setRulesJson] = useState("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const onLoadRef = useRef(onLoad);
 
   useEffect(() => {
     let mounted = true;
+
     const load = async () => {
       try {
-        const loaded = await onLoad();
+        const loaded = await onLoadRef.current();
         if (!mounted) {
           return;
         }
@@ -41,18 +45,22 @@ const ModerationSettingsPanel = ({ onLoad, onSave }: ModerationSettingsPanelProp
         }
       }
     };
+
     load().catch(() => undefined);
+
     return () => {
       mounted = false;
     };
-  }, [onLoad]);
+  }, []);
 
   if (!settings) {
     return (
       <Card>
-        <CardTitle>Moderation Rules</CardTitle>
+        <CardHeader>
+          <CardTitle>Moderation Rules</CardTitle>
+        </CardHeader>
         <CardContent>
-          <p className="text-[#6e3933] text-sm">Loading moderation settings...</p>
+          <p className="text-[#8f5e56] text-sm">Loading moderation settings...</p>
         </CardContent>
       </Card>
     );
@@ -61,18 +69,30 @@ const ModerationSettingsPanel = ({ onLoad, onSave }: ModerationSettingsPanelProp
   const handleSave = async () => {
     setIsSaving(true);
     setErrorMessage(null);
+
     try {
       const parsedRules = JSON.parse(rulesJson) as unknown;
+      if (!Array.isArray(parsedRules)) {
+        setErrorMessage("Rules JSON must be an array.");
+        return;
+      }
+
       const candidate: ModerationSettings = {
         ...settings,
         profanityWords: fromLines(toLines(settings.profanityWords)),
-        rules: Array.isArray(parsedRules) ? parsedRules : [],
+        rules: parsedRules,
       };
       if (!isValidModerationSettings(candidate)) {
-        setErrorMessage("Moderation settings are invalid. Check rules JSON and fields.");
+        setErrorMessage("Moderation settings are invalid. Check the JSON shape and text fields.");
         return;
       }
-      await onSave(candidate);
+
+      const result = await onSave(candidate);
+      if (!result.success) {
+        setErrorMessage("Failed saving settings.");
+        return;
+      }
+
       setSettings(candidate);
     } catch (error: unknown) {
       setErrorMessage(error instanceof Error ? error.message : "Failed saving settings.");
@@ -83,12 +103,14 @@ const ModerationSettingsPanel = ({ onLoad, onSave }: ModerationSettingsPanelProp
 
   return (
     <Card>
-      <CardTitle>Moderation Rules</CardTitle>
-      <CardDescription>
-        Local-first profanity and aqeedah filtering rules for flag batches.
-      </CardDescription>
-      <CardContent className="space-y-3">
-        <div className="space-y-1">
+      <CardHeader>
+        <CardTitle>Moderation Rules</CardTitle>
+        <CardDescription>
+          Edit the local-first profanity and aqeedah filtering rules used during flag batches.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        <div className="space-y-2">
           <Label htmlFor="criteria-input">Content Criteria</Label>
           <textarea
             id="criteria-input"
@@ -99,11 +121,11 @@ const ModerationSettingsPanel = ({ onLoad, onSave }: ModerationSettingsPanelProp
                 contentCriteria: event.currentTarget.value,
               })
             }
-            className="h-28 w-full rounded-md border border-[#d1968f]/45 bg-white/70 p-2 text-sm"
+            className={`${textareaClassName} min-h-32`}
           />
         </div>
 
-        <div className="space-y-1">
+        <div className="space-y-2">
           <Label htmlFor="guidelines-input">Priority Guidelines</Label>
           <textarea
             id="guidelines-input"
@@ -114,11 +136,11 @@ const ModerationSettingsPanel = ({ onLoad, onSave }: ModerationSettingsPanelProp
                 priorityGuidelines: event.currentTarget.value,
               })
             }
-            className="h-24 w-full rounded-md border border-[#d1968f]/45 bg-white/70 p-2 text-sm"
+            className={`${textareaClassName} min-h-28`}
           />
         </div>
 
-        <div className="space-y-1">
+        <div className="space-y-2">
           <Label htmlFor="profanity-input">Custom Profanity Words (one per line)</Label>
           <textarea
             id="profanity-input"
@@ -129,26 +151,24 @@ const ModerationSettingsPanel = ({ onLoad, onSave }: ModerationSettingsPanelProp
                 profanityWords: fromLines(event.currentTarget.value),
               })
             }
-            className="h-20 w-full rounded-md border border-[#d1968f]/45 bg-white/70 p-2 text-sm"
+            className={`${textareaClassName} min-h-24`}
           />
         </div>
 
-        <div className="space-y-1">
+        <div className="space-y-2">
           <Label htmlFor="rules-json-input">Rules JSON</Label>
           <textarea
             id="rules-json-input"
             value={rulesJson}
             onChange={(event) => setRulesJson(event.currentTarget.value)}
-            className="h-32 w-full rounded-md border border-[#d1968f]/45 bg-white/70 p-2 font-mono text-xs"
+            className={`${textareaClassName} min-h-64 font-mono text-xs`}
           />
         </div>
 
         {errorMessage ? (
-          <Input
-            value={errorMessage}
-            readOnly
-            className="border-rose-200 bg-rose-50 text-rose-700 text-sm"
-          />
+          <p className="rounded-[18px] border border-rose-200 bg-rose-50 px-4 py-3 text-rose-700 text-sm">
+            {errorMessage}
+          </p>
         ) : null}
 
         <Button type="button" onClick={handleSave} disabled={isSaving}>

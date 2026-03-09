@@ -231,6 +231,7 @@ fn to_worker_status(status: &str) -> Option<crate::types::WorkerStatusKind> {
     match status {
         "starting" => Some(crate::types::WorkerStatusKind::Starting),
         "ready" => Some(crate::types::WorkerStatusKind::Ready),
+        "stopped" => Some(crate::types::WorkerStatusKind::Stopped),
         "error" => Some(crate::types::WorkerStatusKind::Error),
         _ => None,
     }

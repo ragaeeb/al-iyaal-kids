@@ -102,10 +102,17 @@ export const useBatchController = () => {
       return;
     }
 
-    await cancelBatch({
-      batchId: state.activeBatchId,
-      mode: "stop_after_current",
-    });
+    try {
+      await cancelBatch({
+        batchId: state.activeBatchId,
+        mode: "stop_after_current",
+      });
+    } catch (error: unknown) {
+      dispatch({
+        payload: error instanceof Error ? error.message : "Unable to cancel batch.",
+        type: "start_batch_error",
+      });
+    }
   };
 
   const openOutput = async (path: string) => {

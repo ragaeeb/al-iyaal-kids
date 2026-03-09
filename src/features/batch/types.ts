@@ -83,7 +83,7 @@ export type BatchEvent =
     }
   | {
       type: "worker_status";
-      status: "ready" | "starting" | "error";
+      status: "ready" | "starting" | "stopped" | "error";
       message: string;
     };
 
@@ -91,7 +91,7 @@ export type BatchUiState = {
   selectedInputDir: string;
   activeBatchId: string | null;
   batchesById: Record<string, BatchState>;
-  workerStatus: "idle" | "starting" | "ready" | "error";
+  workerStatus: "idle" | "starting" | "ready" | "stopped" | "error";
   workerMessage: string;
   isStartingBatch: boolean;
   errorMessage: string | null;

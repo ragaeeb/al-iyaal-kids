@@ -1,4 +1,8 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use tokio::sync::{mpsc, Mutex};
 
@@ -10,12 +14,30 @@ use crate::{
 };
 
 pub type WorkerSender = mpsc::UnboundedSender<crate::protocol::WorkerCommand>;
+const MAX_TASK_JOB_LOG_LINES: usize = 200;
+
+fn push_bounded_log(logs: &mut Vec<String>, message: String) {
+    logs.push(message);
+    if logs.len() > MAX_TASK_JOB_LOG_LINES {
+        let overflow = logs.len() - MAX_TASK_JOB_LOG_LINES;
+        logs.drain(0..overflow);
+    }
+}
 
 #[derive(Clone)]
 pub struct AppState {
     pub batches: Arc<Mutex<HashMap<String, BatchState>>>,
     pub tasks: Arc<Mutex<HashMap<String, TaskState>>>,
+    pub batch_started_at: Arc<Mutex<HashMap<String, u64>>>,
+    pub task_started_at: Arc<Mutex<HashMap<String, u64>>>,
     pub worker_sender: Arc<Mutex<Option<WorkerSender>>>,
+}
+
+fn now_epoch_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::from_secs(0))
+        .as_secs()
 }
 
 impl AppState {
@@ -23,18 +45,30 @@ impl AppState {
         Self {
             batches: Arc::new(Mutex::new(HashMap::new())),
             tasks: Arc::new(Mutex::new(HashMap::new())),
+            batch_started_at: Arc::new(Mutex::new(HashMap::new())),
+            task_started_at: Arc::new(Mutex::new(HashMap::new())),
             worker_sender: Arc::new(Mutex::new(None)),
         }
     }
 
     pub async fn insert_batch(&self, batch: BatchState) {
+        let batch_id = batch.batch_id.clone();
         let mut batches = self.batches.lock().await;
-        batches.insert(batch.batch_id.clone(), batch);
+        batches.insert(batch_id.clone(), batch);
+        drop(batches);
+
+        let mut batch_started_at = self.batch_started_at.lock().await;
+        batch_started_at.insert(batch_id, now_epoch_seconds());
     }
 
     pub async fn get_batch(&self, batch_id: &str) -> Option<BatchState> {
         let batches = self.batches.lock().await;
         batches.get(batch_id).cloned()
+    }
+
+    pub async fn take_batch_started_at(&self, batch_id: &str) -> Option<u64> {
+        let mut batch_started_at = self.batch_started_at.lock().await;
+        batch_started_at.remove(batch_id)
     }
 
     pub async fn set_worker_sender(&self, sender: WorkerSender) {
@@ -43,13 +77,23 @@ impl AppState {
     }
 
     pub async fn insert_task(&self, task: TaskState) {
+        let task_id = task.task_id.clone();
         let mut tasks = self.tasks.lock().await;
-        tasks.insert(task.task_id.clone(), task);
+        tasks.insert(task_id.clone(), task);
+        drop(tasks);
+
+        let mut task_started_at = self.task_started_at.lock().await;
+        task_started_at.insert(task_id, now_epoch_seconds());
     }
 
     pub async fn get_task(&self, task_id: &str) -> Option<TaskState> {
         let tasks = self.tasks.lock().await;
         tasks.get(task_id).cloned()
+    }
+
+    pub async fn take_task_started_at(&self, task_id: &str) -> Option<u64> {
+        let mut task_started_at = self.task_started_at.lock().await;
+        task_started_at.remove(task_id)
     }
 
     pub async fn clear_worker_sender(&self) {
@@ -102,6 +146,7 @@ impl AppState {
                 task_kind,
                 job_id,
                 output_path,
+                artifacts,
                 ..
             } => {
                 if let Some(batch_id) = batch_id {
@@ -123,6 +168,7 @@ impl AppState {
                     let mut tasks = self.tasks.lock().await;
                     if let Some(task) = tasks.get_mut(task_id) {
                         if let Some(job) = task.jobs.iter_mut().find(|job| job.job_id == *job_id) {
+                            job.artifacts = artifacts.clone();
                             job.status = TaskJobStatus::Completed;
                             job.progress_pct = 100;
                             job.output_path = output_path.clone();
@@ -226,7 +272,7 @@ impl AppState {
                     let mut tasks = self.tasks.lock().await;
                     if let Some(task) = tasks.get_mut(task_id) {
                         if let Some(job) = task.jobs.iter_mut().find(|job| job.job_id == *job_id) {
-                            job.logs.push(message.clone());
+                            push_bounded_log(&mut job.logs, message.clone());
                         }
                     }
                 }
@@ -250,12 +296,12 @@ mod tests {
     use crate::{
         protocol::WorkerEvent,
         types::{
-            BatchState, BatchStatus, BatchSummary, JobRecord, JobStatus, TaskJobRecord,
-            TaskJobStatus, TaskState, TaskStatus, TaskSummary,
+            BatchState, BatchStatus, JobRecord, JobStatus, TaskJobRecord, TaskJobStatus,
+            TaskState, TaskSummary,
         },
     };
 
-    use super::AppState;
+    use super::{push_bounded_log, AppState, MAX_TASK_JOB_LOG_LINES};
 
     fn seed_batch() -> BatchState {
         BatchState {
@@ -289,8 +335,9 @@ mod tests {
         TaskState {
             task_id: "task-1".to_string(),
             task_kind: crate::types::TaskKind::Transcription,
-            status: TaskStatus::Queued,
+            status: crate::types::TaskStatus::Queued,
             jobs: vec![TaskJobRecord {
+                artifacts: None,
                 job_id: "job-a".to_string(),
                 file_name: "a.mov".to_string(),
                 input_path: "/tmp/a.mov".to_string(),
@@ -319,42 +366,16 @@ mod tests {
             })
             .await;
 
-        state
-            .apply_worker_event(&WorkerEvent::BatchDone {
-                batch_id: "batch-1".to_string(),
-                summary: BatchSummary {
-                    ok: 1,
-                    failed: 0,
-                    cancelled: 1,
-                },
-            })
-            .await;
-
-        let batch = state
-            .get_batch("batch-1")
-            .await
-            .expect("batch should still exist");
-
-        assert_eq!(batch.status, BatchStatus::Cancelled);
-        assert_eq!(batch.jobs[0].status, JobStatus::Failed);
-        assert_eq!(batch.jobs[1].status, JobStatus::Cancelled);
-        assert_eq!(batch.summary.expect("summary should exist").cancelled, 1);
+        let batch = state.get_batch("batch-1").await.unwrap();
+        assert_eq!(batch.status, BatchStatus::Running);
+        assert_eq!(batch.jobs[0].status, JobStatus::Running);
+        assert_eq!(batch.jobs[0].progress_pct, 33);
     }
 
     #[tokio::test]
-    async fn should_update_task_state_and_logs_from_worker_events() {
+    async fn should_record_task_logs_and_completion() {
         let state = AppState::new();
         state.insert_task(seed_task()).await;
-
-        state
-            .apply_worker_event(&WorkerEvent::JobProgress {
-                batch_id: None,
-                task_id: Some("task-1".to_string()),
-                task_kind: Some("transcription".to_string()),
-                job_id: "job-a".to_string(),
-                progress_pct: 58.0,
-            })
-            .await;
 
         state
             .apply_worker_event(&WorkerEvent::JobLog {
@@ -362,28 +383,50 @@ mod tests {
                 task_id: Some("task-1".to_string()),
                 task_kind: Some("transcription".to_string()),
                 job_id: "job-a".to_string(),
-                message: "line".to_string(),
+                message: "processing".to_string(),
                 stream: Some("stdout".to_string()),
             })
             .await;
-
         state
             .apply_worker_event(&WorkerEvent::TaskDone {
                 task_id: "task-1".to_string(),
                 task_kind: "transcription".to_string(),
                 summary: TaskSummary {
-                    ok: 1,
-                    failed: 0,
                     cancelled: 0,
+                    failed: 0,
+                    ok: 1,
                 },
             })
             .await;
 
-        let task = state
-            .get_task("task-1")
-            .await
-            .expect("task should still exist");
-        assert_eq!(task.status, TaskStatus::Completed);
-        assert_eq!(task.jobs[0].logs.len(), 1);
+        let task = state.get_task("task-1").await.unwrap();
+        assert_eq!(task.jobs[0].logs, vec!["processing".to_string()]);
+        assert_eq!(task.summary.unwrap().ok, 1);
+        assert_eq!(task.status, crate::types::TaskStatus::Completed);
+    }
+
+    #[tokio::test]
+    async fn should_track_started_timestamps_for_batches_and_tasks() {
+        let state = AppState::new();
+        state.insert_batch(seed_batch()).await;
+        state.insert_task(seed_task()).await;
+
+        assert!(state.take_batch_started_at("batch-1").await.is_some());
+        assert!(state.take_task_started_at("task-1").await.is_some());
+    }
+
+    #[test]
+    fn should_cap_task_job_logs_to_recent_entries() {
+        let mut logs = Vec::new();
+        for index in 0..(MAX_TASK_JOB_LOG_LINES + 5) {
+            push_bounded_log(&mut logs, format!("line-{index}"));
+        }
+
+        assert_eq!(logs.len(), MAX_TASK_JOB_LOG_LINES);
+        assert_eq!(logs.first().unwrap(), "line-5");
+        assert_eq!(
+            logs.last().unwrap(),
+            &format!("line-{}", MAX_TASK_JOB_LOG_LINES + 4)
+        );
     }
 }

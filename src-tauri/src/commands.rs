@@ -5,26 +5,29 @@ use std::{
 
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
+use tokio::fs as tokio_fs;
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use crate::{
+    analytics,
     file_discovery::{build_output_dir, collect_media_files, discover_srt_items, discover_video_items},
     ids::{to_file_name, to_job_id},
     protocol::WorkerCommand,
     state::AppState,
     types::{
-        BatchEvent, BatchStartedResponse, BatchState, BatchStatus, CancelAck, CancelBatchRequest,
-        CancelTaskRequest, CutJobStartedResponse, JobRecord, JobStatus, ListSrtFilesRequest,
-        ListVideosRequest, ModerationRule, ModerationSettings, SaveAck, SrtListItem,
-        StartBatchRequest, StartCutJobRequest, StartFlagBatchRequest, StartTranscriptionBatchRequest,
-        TaskCancelAck, TaskJobRecord, TaskJobStatus, TaskKind, TaskState, TaskStatus, VideoListItem,
-        WorkerStatusKind,
+        AnalyticsSnapshot, BatchEvent, BatchStartedResponse, BatchState, BatchStatus, CancelAck,
+        CancelBatchRequest, CancelTaskRequest, CutJobStartedResponse, JobRecord, JobStatus,
+        ListSrtFilesRequest, ListVideosRequest, ModerationRule, ModerationSettings, SaveAck,
+        SrtListItem, StartBatchRequest, StartCutJobRequest, StartFlagBatchRequest,
+        StartTranscriptionBatchRequest, TaskCancelAck, TaskJobRecord, TaskJobStatus, TaskKind,
+        TaskState, TaskStatus, VideoListItem, WorkerStatusKind,
     },
     worker::ensure_worker_sender,
 };
 
 const BATCH_EVENT_NAME: &str = "batch-event";
+const MAX_READ_TEXT_FILE_BYTES: u64 = 5 * 1024 * 1024;
 
 fn ensure_supported_output_mode(output_dir_mode: &str) -> Result<(), String> {
     if output_dir_mode != "audio_replaced_default" {
@@ -109,6 +112,36 @@ fn require_worker_sender(sender: Option<crate::state::WorkerSender>) -> Result<c
     sender.ok_or_else(|| "Worker is not running.".to_string())
 }
 
+fn is_allowed_text_sidecar_path(path: &Path) -> bool {
+    let file_name = path.file_name().and_then(|value| value.to_str()).unwrap_or_default();
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase());
+
+    matches!(extension.as_deref(), Some("srt")) || file_name.ends_with(".analysis.json")
+}
+
+fn validate_read_text_file_path(path: &str) -> Result<PathBuf, String> {
+    if path.trim().is_empty() {
+        return Err("File path is required.".to_string());
+    }
+
+    let canonical = PathBuf::from(path)
+        .canonicalize()
+        .map_err(|error| format!("Failed resolving file path {path}: {error}"))?;
+
+    if !canonical.is_file() {
+        return Err(format!("Path is not a file: {}", canonical.display()));
+    }
+
+    if !is_allowed_text_sidecar_path(&canonical) {
+        return Err("Only .srt and .analysis.json sidecar files can be read.".to_string());
+    }
+
+    Ok(canonical)
+}
+
 fn create_batch_jobs(input_paths: &[String]) -> Vec<JobRecord> {
     input_paths
         .iter()
@@ -128,6 +161,7 @@ fn create_task_jobs(input_paths: &[String]) -> Vec<TaskJobRecord> {
     input_paths
         .iter()
         .map(|input_path| TaskJobRecord {
+            artifacts: None,
             job_id: to_job_id(input_path),
             file_name: to_file_name(input_path),
             input_path: input_path.clone(),
@@ -142,7 +176,11 @@ fn create_task_jobs(input_paths: &[String]) -> Vec<TaskJobRecord> {
 
 fn default_moderation_settings() -> ModerationSettings {
     ModerationSettings {
+        amazon_nova_api_key: String::new(),
+        analysis_strategy: "fast".to_string(),
+        engine: "blacklist".to_string(),
         content_criteria: "1. Adult relationships (kissing, romantic/sexual content, dating)\n2. Bad morals or unethical behavior\n3. Content against Islamic values and aqeedah\n4. Magic, sorcery, or supernatural practices\n5. Music references or musical performances\n6. Violence or frightening content\n7. Inappropriate language or themes".to_string(),
+        google_api_key: String::new(),
         priority_guidelines: "Priority Guidelines:\n- HIGH: Major aqeedah violations, explicit magic/sorcery, sexual content\n- MEDIUM: Offensive language, questionable behavior, moderate violence\n- LOW: Mild concerns, ambiguous references".to_string(),
         profanity_words: Vec::new(),
         rules: vec![
@@ -177,6 +215,14 @@ fn default_moderation_settings() -> ModerationSettings {
             },
         ],
     }
+}
+
+fn is_supported_moderation_engine(value: &str) -> bool {
+    matches!(value, "blacklist" | "gemini" | "nova_pro")
+}
+
+fn is_supported_analysis_strategy(value: &str) -> bool {
+    matches!(value, "fast" | "deep")
 }
 
 fn moderation_settings_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -353,7 +399,21 @@ pub async fn start_flag_batch(
         "No .srt files were selected.",
     )?;
 
-    let settings = read_or_initialize_moderation_settings(&app)?;
+    let mut settings = read_or_initialize_moderation_settings(&app)?;
+    if let Some(engine) = request.engine {
+        if !is_supported_moderation_engine(&engine) {
+            return Err(format!("Unsupported moderation engine: {engine}"));
+        }
+        settings.engine = engine;
+    }
+    if let Some(analysis_strategy) = request.analysis_strategy {
+        if !is_supported_analysis_strategy(&analysis_strategy) {
+            return Err(format!(
+                "Unsupported moderation analysis strategy: {analysis_strategy}"
+            ));
+        }
+        settings.analysis_strategy = analysis_strategy;
+    }
     let task_id = Uuid::new_v4().to_string();
 
     state
@@ -499,6 +559,11 @@ pub async fn get_moderation_settings(app: AppHandle) -> Result<ModerationSetting
 }
 
 #[tauri::command]
+pub async fn get_analytics_snapshot(app: AppHandle) -> Result<AnalyticsSnapshot, String> {
+    analytics::get_analytics_snapshot(&app)
+}
+
+#[tauri::command]
 pub async fn save_moderation_settings(
     app: AppHandle,
     request: ModerationSettings,
@@ -509,7 +574,21 @@ pub async fn save_moderation_settings(
 
 #[tauri::command]
 pub async fn read_text_file(path: String) -> Result<String, String> {
-    fs::read_to_string(&path).map_err(|error| format!("Failed reading file {path}: {error}"))
+    let validated_path = validate_read_text_file_path(&path)?;
+    let metadata = tokio_fs::metadata(&validated_path)
+        .await
+        .map_err(|error| format!("Failed reading file metadata {}: {error}", validated_path.display()))?;
+    if metadata.len() > MAX_READ_TEXT_FILE_BYTES {
+        return Err(format!(
+            "File is too large to read safely (max {} bytes): {}",
+            MAX_READ_TEXT_FILE_BYTES,
+            validated_path.display()
+        ));
+    }
+
+    tokio_fs::read_to_string(&validated_path)
+        .await
+        .map_err(|error| format!("Failed reading file {}: {error}", validated_path.display()))
 }
 
 #[tauri::command]
@@ -536,8 +615,10 @@ mod tests {
         create_task_jobs, default_moderation_settings, ensure_supported_cancel_mode,
         ensure_supported_cut_output_mode, ensure_supported_output_mode, ensure_supported_yap_mode,
         get_batch_state_inner, get_task_state_inner, require_worker_sender,
+        validate_read_text_file_path,
     };
     use crate::state::AppState;
+    use uuid::Uuid;
 
     #[test]
     fn should_reject_unsupported_output_mode() {
@@ -555,6 +636,34 @@ mod tests {
     fn should_reject_unsupported_yap_mode() {
         let result = ensure_supported_yap_mode("manual");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn should_allow_reading_srt_sidecars() {
+        let base_dir = std::env::temp_dir().join(format!("al-iyaal-read-sidecar-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&base_dir).unwrap();
+        let path = base_dir.join("episode.srt");
+        std::fs::write(&path, "1").unwrap();
+
+        let validated = validate_read_text_file_path(path.to_string_lossy().as_ref()).unwrap();
+
+        assert_eq!(validated, path.canonicalize().unwrap());
+
+        std::fs::remove_dir_all(base_dir).unwrap();
+    }
+
+    #[test]
+    fn should_reject_non_sidecar_files_for_read_text_file() {
+        let base_dir = std::env::temp_dir().join(format!("al-iyaal-read-sidecar-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&base_dir).unwrap();
+        let path = base_dir.join("notes.txt");
+        std::fs::write(&path, "secret").unwrap();
+
+        let error = validate_read_text_file_path(path.to_string_lossy().as_ref()).unwrap_err();
+
+        assert!(error.contains(".srt and .analysis.json"));
+
+        std::fs::remove_dir_all(base_dir).unwrap();
     }
 
     #[test]

@@ -4,6 +4,9 @@
     "components": "@/components",
     "utils": "@/lib"
   },
+  "registries": {
+    "fab-ui": "https://www.fab-ui.com/r/{name}.json"
+  },
   "rsc": false,
   "style": "new-york",
   "tailwind": {

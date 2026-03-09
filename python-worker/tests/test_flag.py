@@ -49,7 +49,7 @@ def test_should_flag_profanity_and_aqeedah_keywords(tmp_path: Path) -> None:
     assert analysis_path.exists()
 
     payload = json.loads(analysis_path.read_text())
-    assert payload["engine"] == "local_rules"
+    assert payload["engine"] == "blacklist"
     assert len(payload["flagged"]) >= 2
     categories = {item["category"] for item in payload["flagged"]}
     assert "language" in categories

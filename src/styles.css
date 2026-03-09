@@ -12,6 +12,7 @@
   --border-soft: #ead3c4;
   --text-primary: #2f1714;
   --text-secondary: #7f524a;
+  --text-muted: #9e5c50;
 
   font-family: "Space Grotesk", "Avenir Next", "Segoe UI", sans-serif;
   color: var(--text-primary);

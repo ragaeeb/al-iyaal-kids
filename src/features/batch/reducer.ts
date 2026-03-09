@@ -6,6 +6,7 @@ import type {
   JobRecord,
 } from "@/features/batch/types";
 import { clampProgress } from "@/features/batch/utils";
+import { appendBoundedLogLine } from "@/features/media/logs";
 
 export const createInitialBatchUiState = (): BatchUiState => ({
   activeBatchId: null,
@@ -77,7 +78,7 @@ const applyBatchEvent = (batch: BatchState, event: BatchEvent): BatchState => {
   if (event.type === "job_log") {
     return updateJob(batch, event.jobId, (job) => ({
       ...job,
-      logs: [...(job.logs ?? []), event.message],
+      logs: appendBoundedLogLine(job.logs ?? [], event.message),
     }));
   }
 

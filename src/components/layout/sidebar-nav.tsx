@@ -24,6 +24,8 @@ const SidebarNav = ({
         <button
           type="button"
           onClick={onToggleCollapse}
+          aria-expanded={!isCollapsed}
+          aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
           className="flex size-10 items-center justify-center rounded-2xl border border-[#ead3c4] bg-[#f8e8de] text-[#71443c] transition hover:bg-[#fbefe7] hover:text-[#88322d]"
           title={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
         >
@@ -33,6 +35,8 @@ const SidebarNav = ({
       <button
         type="button"
         onClick={() => onNavigate("dashboard")}
+        aria-current={activePage === "dashboard" ? "page" : undefined}
+        aria-label="Dashboard"
         className={cn(
           "mb-4 flex items-center rounded-2xl px-3 py-3 text-left transition-all",
           isCollapsed ? "justify-center" : "gap-3",
@@ -44,7 +48,7 @@ const SidebarNav = ({
       >
         <img
           src={logoSrc}
-          alt="al-Iyal Kids logo"
+          alt="al-Iyaal Kids logo"
           width={34}
           height={34}
           className="rounded-2xl border border-[#d8b7a4] bg-white p-1 shadow-sm"
@@ -67,6 +71,8 @@ const SidebarNav = ({
               key={page.key}
               type="button"
               onClick={() => onNavigate(page.key)}
+              aria-current={isActive ? "page" : undefined}
+              aria-label={page.label}
               className={cn(
                 "group flex items-center rounded-2xl px-3 py-3 text-left transition-all",
                 isCollapsed ? "justify-center" : "gap-3",

@@ -1,5 +1,6 @@
 use std::{
     fs,
+    io::Write,
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -53,8 +54,59 @@ fn write_store(path: &Path, store: &AnalyticsStore) -> Result<(), String> {
 
     let content = serde_json::to_string_pretty(store)
         .map_err(|error| format!("Failed serializing analytics store: {error}"))?;
-    fs::write(path, content)
-        .map_err(|error| format!("Failed writing analytics store {}: {error}", path.display()))
+    let Some(parent) = path.parent() else {
+        return Err(format!(
+            "Failed determining parent directory for analytics store {}",
+            path.display()
+        ));
+    };
+    let temp_path = parent.join(format!(
+        ".{}.tmp-{}",
+        path.file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("history.json"),
+        now_epoch_seconds()
+    ));
+
+    let mut temp_file = fs::File::create(&temp_path).map_err(|error| {
+        format!(
+            "Failed creating temp analytics store {}: {error}",
+            temp_path.display()
+        )
+    })?;
+    temp_file.write_all(content.as_bytes()).map_err(|error| {
+        format!(
+            "Failed writing temp analytics store {}: {error}",
+            temp_path.display()
+        )
+    })?;
+    temp_file.sync_all().map_err(|error| {
+        format!(
+            "Failed syncing temp analytics store {}: {error}",
+            temp_path.display()
+        )
+    })?;
+    drop(temp_file);
+
+    fs::rename(&temp_path, path).map_err(|error| {
+        format!(
+            "Failed renaming analytics store {}: {error}",
+            path.display()
+        )
+    })?;
+
+    let parent_dir = fs::File::open(parent).map_err(|error| {
+        format!(
+            "Failed opening analytics directory {} for sync: {error}",
+            parent.display()
+        )
+    })?;
+    parent_dir.sync_all().map_err(|error| {
+        format!(
+            "Failed syncing analytics directory {}: {error}",
+            parent.display()
+        )
+    })
 }
 
 fn now_epoch_seconds() -> u64 {
@@ -174,41 +226,20 @@ fn snapshot_from_store(store: &AnalyticsStore) -> AnalyticsSnapshot {
         totals
     });
 
-    let remove_music_jobs = store
-        .records
-        .iter()
-        .filter(|record| record.task_kind == AnalyticsTaskKind::RemoveMusic)
-        .map(|record| record.job_count)
-        .sum();
-    let transcription_jobs = store
-        .records
-        .iter()
-        .filter(|record| record.task_kind == AnalyticsTaskKind::Transcription)
-        .map(|record| record.job_count)
-        .sum();
-    let flag_jobs = store
-        .records
-        .iter()
-        .filter(|record| record.task_kind == AnalyticsTaskKind::Flag)
-        .map(|record| record.job_count)
-        .sum();
-    let cut_jobs = store
-        .records
-        .iter()
-        .filter(|record| record.task_kind == AnalyticsTaskKind::Cut)
-        .map(|record| record.job_count)
-        .sum();
-
     AnalyticsSnapshot {
         breakdown: vec![
-            breakdown_entry(AnalyticsTaskKind::RemoveMusic, remove_music_jobs, "Remove Music"),
+            breakdown_entry(
+                AnalyticsTaskKind::RemoveMusic,
+                totals.total_remove_music_jobs,
+                "Remove Music",
+            ),
             breakdown_entry(
                 AnalyticsTaskKind::Transcription,
-                transcription_jobs,
+                totals.total_transcription_jobs,
                 "Transcriptions",
             ),
-            breakdown_entry(AnalyticsTaskKind::Flag, flag_jobs, "Detection Runs"),
-            breakdown_entry(AnalyticsTaskKind::Cut, cut_jobs, "Cut Exports"),
+            breakdown_entry(AnalyticsTaskKind::Flag, totals.total_flag_jobs, "Detection Runs"),
+            breakdown_entry(AnalyticsTaskKind::Cut, totals.total_cut_jobs, "Cut Exports"),
         ],
         recent_runs: store.records.len(),
         totals,

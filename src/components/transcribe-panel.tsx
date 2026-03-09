@@ -1,12 +1,13 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { FileAudio2, FolderOpen, LoaderCircle, Plus, Sparkles, Trash2 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import { LogOutput } from "@/components/log-output";
 import { TaskDrawer } from "@/components/task-drawer";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { getLatestTask, getLatestTaskLogLine } from "@/features/media/selectors";
 import { listVideos } from "@/features/media/transport";
 import type { useMediaController } from "@/features/media/useMediaController";
 
@@ -58,20 +59,29 @@ const toWorkerStatusVariant = (workerStatus: MediaController["state"]["workerSta
   return "running" as const;
 };
 
+const toTaskStatusVariant = (status: MediaController["state"]["tasksById"][string]["status"]) => {
+  if (status === "completed") {
+    return "completed" as const;
+  }
+
+  if (status === "cancelled") {
+    return "cancelled" as const;
+  }
+
+  if (status === "queued") {
+    return "queued" as const;
+  }
+
+  return "running" as const;
+};
+
 const TranscribePanel = ({ controller }: TranscribePanelProps) => {
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
   const [isResolvingFolder, setIsResolvingFolder] = useState(false);
 
-  const transcriptionTask = useMemo(() => {
-    return Object.values(controller.state.tasksById)
-      .filter((task) => task.taskKind === "transcription")
-      .at(-1);
-  }, [controller.state.tasksById]);
+  const transcriptionTask = getLatestTask(controller.state.tasksById, "transcription");
   const taskActivity = toTaskActivity(transcriptionTask?.status, controller.state.workerStatus);
-  const latestLogLine = transcriptionTask?.jobs
-    .flatMap((job) => job.logs)
-    .filter(Boolean)
-    .at(-1);
+  const latestLogLine = getLatestTaskLogLine(transcriptionTask);
 
   const addVideoFiles = async () => {
     const response = await open({
@@ -135,7 +145,7 @@ const TranscribePanel = ({ controller }: TranscribePanelProps) => {
                     {transcriptionTask.taskId}
                   </p>
                 </div>
-                <Badge variant={transcriptionTask.status === "completed" ? "completed" : "running"}>
+                <Badge variant={toTaskStatusVariant(transcriptionTask.status)}>
                   {transcriptionTask.status}
                 </Badge>
               </div>

@@ -1,6 +1,6 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { Film, LoaderCircle, Plus, Scissors, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { TaskDrawer } from "@/components/task-drawer";
 import { Badge } from "@/components/ui/badge";
@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DrawerClose } from "@/components/ui/drawer";
 import { findSubtitleAtTime, formatTime, parseSrt } from "@/features/editor/subtitles";
+import { getLatestTask, getTaskOutputPath } from "@/features/media/selectors";
 import { readTextFile } from "@/features/media/transport";
 import type { AnalysisSidecar, CutRange, SubtitleEntry, TaskState } from "@/features/media/types";
 import type { useMediaController } from "@/features/media/useMediaController";
@@ -75,15 +76,24 @@ const applyLoadedSidecars = (
   setSubtitles: (value: SubtitleEntry[]) => void,
 ) => {
   if (subtitleResult.status === "fulfilled") {
-    setSubtitles(parseSrt(subtitleResult.value));
-    setHasSubtitleSidecar(true);
+    try {
+      setSubtitles(parseSrt(subtitleResult.value));
+      setHasSubtitleSidecar(true);
+    } catch {
+      setSubtitles([]);
+      setHasSubtitleSidecar(false);
+    }
   } else {
     setSubtitles([]);
     setHasSubtitleSidecar(false);
   }
 
   if (analysisResult.status === "fulfilled") {
-    setAnalysisSidecar(parseAnalysisSidecar(analysisResult.value));
+    try {
+      setAnalysisSidecar(parseAnalysisSidecar(analysisResult.value));
+    } catch {
+      setAnalysisSidecar(null);
+    }
     return;
   }
 
@@ -239,6 +249,22 @@ type RangesDrawerContentProps = {
   ranges: LocalRange[];
 };
 
+const toTaskStatusVariant = (status: TaskState["status"]) => {
+  if (status === "completed") {
+    return "completed" as const;
+  }
+
+  if (status === "cancelled") {
+    return "cancelled" as const;
+  }
+
+  if (status === "queued") {
+    return "queued" as const;
+  }
+
+  return "running" as const;
+};
+
 const RangesDrawerContent = ({
   cutOutputPath,
   cutTask,
@@ -262,9 +288,7 @@ const RangesDrawerContent = ({
         <div className="rounded-[20px] border border-[#ead3c4] bg-[#fffaf6] px-4 py-3">
           <div className="flex items-center justify-between gap-3">
             <p className="font-medium text-[#5b2722] text-sm">{cutTask.taskId}</p>
-            <Badge variant={cutTask.status === "completed" ? "completed" : "running"}>
-              {cutTask.status}
-            </Badge>
+            <Badge variant={toTaskStatusVariant(cutTask.status)}>{cutTask.status}</Badge>
           </div>
           <p className="mt-2 text-[#8f5e56] text-sm">
             {isExporting ? "Export in progress..." : "Ready."}
@@ -325,6 +349,7 @@ const RangesDrawerContent = ({
 
 const SimpleCutEditorPanel = ({ controller }: SimpleCutEditorPanelProps) => {
   const [videoPath, setVideoPath] = useState<string | null>(null);
+  const [selectedVideoPath, setSelectedVideoPath] = useState<string | null>(null);
   const [markerStart, setMarkerStart] = useState<number | null>(null);
   const [markerEnd, setMarkerEnd] = useState<number | null>(null);
   const [ranges, setRanges] = useState<LocalRange[]>([]);
@@ -337,28 +362,19 @@ const SimpleCutEditorPanel = ({ controller }: SimpleCutEditorPanelProps) => {
   const [analysisSidecar, setAnalysisSidecar] = useState<AnalysisSidecar | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
-  const cutTask = useMemo(() => {
-    return Object.values(controller.state.tasksById)
-      .filter((task) => task.taskKind === "cut")
-      .at(-1);
-  }, [controller.state.tasksById]);
-
-  const cutOutputPath = useMemo(() => {
-    if (!cutTask) {
-      return null;
-    }
-    return cutTask.jobs.find((job) => typeof job.outputPath === "string")?.outputPath ?? null;
-  }, [cutTask]);
-
-  const currentSubtitle = useMemo(
-    () => findSubtitleAtTime(subtitles, currentTime),
-    [subtitles, currentTime],
-  );
+  const cutTask = getLatestTask(controller.state.tasksById, "cut");
+  const cutOutputPath = getTaskOutputPath(cutTask);
+  const currentSubtitle = findSubtitleAtTime(subtitles, currentTime);
   const isCutTaskActive =
     isExporting || cutTask?.status === "queued" || cutTask?.status === "running";
 
   useEffect(() => {
-    if (cutTask?.status !== "completed" || !cutOutputPath) {
+    if (
+      cutTask?.status !== "completed" ||
+      !cutOutputPath ||
+      !selectedVideoPath ||
+      !cutTask.jobs.some((job) => job.inputPath === selectedVideoPath)
+    ) {
       return;
     }
 
@@ -366,7 +382,7 @@ const SimpleCutEditorPanel = ({ controller }: SimpleCutEditorPanelProps) => {
     setPlaybackError(null);
     setCurrentTime(0);
     setIsShowingExportOutput(true);
-  }, [cutOutputPath, cutTask?.status]);
+  }, [cutOutputPath, cutTask?.jobs, cutTask?.status, selectedVideoPath]);
 
   useEffect(() => {
     let cancelled = false;
@@ -418,6 +434,7 @@ const SimpleCutEditorPanel = ({ controller }: SimpleCutEditorPanelProps) => {
     const selectedPath = toPathList(response as string | string[] | null).at(0) ?? null;
     const selected = selectedPath ? normalizeDialogPath(selectedPath) : null;
     setVideoPath(selected);
+    setSelectedVideoPath(selected);
     setRanges([]);
     setMarkerStart(null);
     setMarkerEnd(null);
@@ -487,9 +504,13 @@ const SimpleCutEditorPanel = ({ controller }: SimpleCutEditorPanelProps) => {
     if (!videoPath || ranges.length === 0) {
       return;
     }
+    setSelectedVideoPath(videoPath);
     setIsExporting(true);
-    await controller.startCut(videoPath, toCutRanges(ranges));
-    setIsExporting(false);
+    try {
+      await controller.startCut(videoPath, toCutRanges(ranges));
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   return (

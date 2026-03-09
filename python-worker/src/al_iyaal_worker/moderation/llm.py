@@ -147,6 +147,10 @@ def _post_json(
     headers: dict[str, str],
     timeout_seconds: float = 600.0,
 ) -> dict[str, Any]:
+    parsed = parse.urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError(f"Unsupported URL scheme: {parsed.scheme}")
+
     body = json.dumps(payload).encode("utf-8")
     request_headers = {"Content-Type": "application/json", **headers}
     http_request = request.Request(url, data=body, headers=request_headers, method="POST")
@@ -165,7 +169,7 @@ def _gemini_model_for_strategy(strategy: str) -> str:
 
 
 def _nova_model_for_strategy(strategy: str) -> str:
-    return "nova-pro-v1" if strategy == "deep" else "nova-lite-v1"
+    return "nova-pro-v1" if strategy == "deep" else "nova-2-lite-v1"
 
 
 def describe_llm_request(settings: dict[str, Any]) -> LlmRequestConfig:

@@ -25,8 +25,10 @@ const App = () => {
       onNavigate={setActivePage}
       onToggleSidebar={() => setIsSidebarCollapsed((previous) => !previous)}
     >
-      {activePage === "dashboard" ? <DashboardPanel onNavigate={setActivePage} /> : null}
-      {activePage === "remove-music" ? (
+      <section hidden={activePage !== "dashboard"} aria-hidden={activePage !== "dashboard"}>
+        <DashboardPanel onNavigate={setActivePage} />
+      </section>
+      <section hidden={activePage !== "remove-music"} aria-hidden={activePage !== "remove-music"}>
         <RemoveMusicPanel
           selectedInputDir={batchController.state.selectedInputDir}
           isStartingBatch={batchController.state.isStartingBatch}
@@ -42,14 +44,25 @@ const App = () => {
           onOpenOutput={batchController.openOutput}
           onClearError={batchController.clearError}
         />
-      ) : null}
-      {activePage === "transcribe" ? <TranscribePanel controller={mediaController} /> : null}
-      {activePage === "profanity-detection" ? (
+      </section>
+      <section hidden={activePage !== "transcribe"} aria-hidden={activePage !== "transcribe"}>
+        <TranscribePanel controller={mediaController} />
+      </section>
+      <section
+        hidden={activePage !== "profanity-detection"}
+        aria-hidden={activePage !== "profanity-detection"}
+      >
         <ProfanityPanel controller={mediaController} />
-      ) : null}
-      {activePage === "cut-video" ? <SimpleCutEditorPanel controller={mediaController} /> : null}
-      {activePage === "analytics" ? <AnalyticsPanel /> : null}
-      {activePage === "settings" ? <SettingsPanel /> : null}
+      </section>
+      <section hidden={activePage !== "cut-video"} aria-hidden={activePage !== "cut-video"}>
+        <SimpleCutEditorPanel controller={mediaController} />
+      </section>
+      <section hidden={activePage !== "analytics"} aria-hidden={activePage !== "analytics"}>
+        <AnalyticsPanel />
+      </section>
+      <section hidden={activePage !== "settings"} aria-hidden={activePage !== "settings"}>
+        <SettingsPanel />
+      </section>
     </AppShell>
   );
 };

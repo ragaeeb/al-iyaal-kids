@@ -40,3 +40,4 @@ src-tauri/icons/*
 *.sln
 *.sw?
 vite-env.d.ts
+.minimax

@@ -126,7 +126,7 @@ export type ModerationSettings = {
 };
 
 export type AnalysisSidecar = {
-  engine: "local_rules" | "gemini" | "nova_pro";
+  engine: ModerationEngine;
   flagged: FlaggedSegment[];
   summary: string;
   createdAt: string;

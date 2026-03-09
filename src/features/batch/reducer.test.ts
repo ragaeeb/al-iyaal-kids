@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 
 import { batchReducer, createInitialBatchUiState } from "@/features/batch/reducer";
 import type { BatchState } from "@/features/batch/types";
+import { MAX_STORED_LOG_LINES } from "@/features/media/logs";
 
 const createBatch = (): BatchState => ({
   batchId: "batch-1",
@@ -101,5 +102,32 @@ describe("batch reducer", () => {
 
     expect(state.workerStatus).toBe("ready");
     expect(state.workerMessage).toBe("Worker online");
+  });
+
+  it("should cap remove-music job logs to the recent window", () => {
+    const seed = batchReducer(createInitialBatchUiState(), {
+      payload: createBatch(),
+      type: "start_batch_success",
+    });
+
+    const next = Array.from({ length: MAX_STORED_LOG_LINES + 3 }, (_, index) => index).reduce(
+      (state, index) =>
+        batchReducer(state, {
+          payload: {
+            batchId: "batch-1",
+            jobId: "job-a",
+            message: `line-${index}`,
+            stream: "stdout",
+            type: "job_log",
+          },
+          type: "apply_event",
+        }),
+      seed,
+    );
+
+    const logs = next.batchesById["batch-1"]?.jobs[0]?.logs ?? [];
+    expect(logs).toHaveLength(MAX_STORED_LOG_LINES);
+    expect(logs.at(0)).toBe("line-3");
+    expect(logs.at(-1)).toBe(`line-${MAX_STORED_LOG_LINES + 2}`);
   });
 });

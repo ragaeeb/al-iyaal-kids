@@ -73,7 +73,29 @@ const buildModerationOverview = (jobs: ModerationJobResult[]): ModerationOvervie
 };
 
 const parseAnalysisSidecar = (content: string): AnalysisSidecar => {
-  return JSON.parse(content) as AnalysisSidecar;
+  const parsed = JSON.parse(content) as unknown;
+
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("Invalid analysis sidecar shape");
+  }
+
+  const candidate = parsed as Partial<AnalysisSidecar>;
+  if (!Array.isArray(candidate.flagged) || typeof candidate.summary !== "string") {
+    throw new Error("Invalid analysis sidecar shape");
+  }
+
+  return {
+    createdAt: typeof candidate.createdAt === "string" ? candidate.createdAt : "",
+    engine:
+      candidate.engine === "gemini" ||
+      candidate.engine === "nova_pro" ||
+      candidate.engine === "blacklist"
+        ? candidate.engine
+        : "blacklist",
+    flagged: candidate.flagged,
+    summary: candidate.summary,
+    videoFileName: typeof candidate.videoFileName === "string" ? candidate.videoFileName : "",
+  };
 };
 
 const toJobArtifacts = (value: unknown): TaskJobArtifacts | undefined => {

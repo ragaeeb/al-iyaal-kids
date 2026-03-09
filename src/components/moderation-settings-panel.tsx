@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -26,13 +26,14 @@ const ModerationSettingsPanel = ({ onLoad, onSave }: ModerationSettingsPanelProp
   const [rulesJson, setRulesJson] = useState("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const onLoadRef = useRef(onLoad);
 
   useEffect(() => {
     let mounted = true;
 
     const load = async () => {
       try {
-        const loaded = await onLoad();
+        const loaded = await onLoadRef.current();
         if (!mounted) {
           return;
         }
@@ -50,7 +51,7 @@ const ModerationSettingsPanel = ({ onLoad, onSave }: ModerationSettingsPanelProp
     return () => {
       mounted = false;
     };
-  }, [onLoad]);
+  }, []);
 
   if (!settings) {
     return (
@@ -71,16 +72,27 @@ const ModerationSettingsPanel = ({ onLoad, onSave }: ModerationSettingsPanelProp
 
     try {
       const parsedRules = JSON.parse(rulesJson) as unknown;
+      if (!Array.isArray(parsedRules)) {
+        setErrorMessage("Rules JSON must be an array.");
+        return;
+      }
+
       const candidate: ModerationSettings = {
         ...settings,
         profanityWords: fromLines(toLines(settings.profanityWords)),
-        rules: Array.isArray(parsedRules) ? parsedRules : [],
+        rules: parsedRules,
       };
       if (!isValidModerationSettings(candidate)) {
         setErrorMessage("Moderation settings are invalid. Check the JSON shape and text fields.");
         return;
       }
-      await onSave(candidate);
+
+      const result = await onSave(candidate);
+      if (!result.success) {
+        setErrorMessage("Failed saving settings.");
+        return;
+      }
+
       setSettings(candidate);
     } catch (error: unknown) {
       setErrorMessage(error instanceof Error ? error.message : "Failed saving settings.");

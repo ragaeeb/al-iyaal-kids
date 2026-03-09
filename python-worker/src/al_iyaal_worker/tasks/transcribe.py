@@ -42,6 +42,13 @@ def parse_yap_progress_line(line: str) -> tuple[int, str] | None:
     return None
 
 
+def _sanitize_command_preview(transcribe_command: list[str], video_path: Path, srt_path: Path) -> str:
+    command_preview = " ".join([str(part) for part in transcribe_command])
+    command_preview = command_preview.replace(str(video_path), video_path.name)
+    command_preview = command_preview.replace(str(srt_path), srt_path.name)
+    return command_preview
+
+
 def process_transcription_batch(
     command: StartTranscriptionBatchCommand,
     emit: EmitEvent,
@@ -74,12 +81,13 @@ def process_transcription_batch(
             video_path=video_path,
             output_srt_path=srt_path,
         )
+        command_preview = _sanitize_command_preview(transcribe_command, video_path, srt_path)
         emit_job_log(
             emit,
             command.task_id,
             "transcription",
             job_id,
-            f"Command: {' '.join(str(part) for part in transcribe_command)}",
+            f"Command: {command_preview}",
         )
 
         try:
@@ -155,7 +163,7 @@ def process_transcription_batch(
                 command.task_id,
                 "transcription",
                 job_id,
-                f"Missing transcript output: {srt_path}",
+                f"Missing transcript output: {srt_path.name}",
             )
             continue
 
@@ -165,7 +173,7 @@ def process_transcription_batch(
             command.task_id,
             "transcription",
             job_id,
-            f"Transcript written to {srt_path}",
+            f"Transcript written to {srt_path.name}",
         )
         emit_task_job_done(
             emit,

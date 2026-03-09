@@ -107,7 +107,6 @@ class WorkerDaemon:
             name=f"transcription-{command.task_id}",
         )
         thread.start()
-        self._emit_status("starting", f"Started transcription thread for task {command.task_id}.")
 
     def _start_flag_batch(self, command: StartFlagBatchCommand) -> None:
         if not self._reserve_operation(

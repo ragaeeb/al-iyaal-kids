@@ -95,7 +95,7 @@ def process_flag_batch(
         try:
             if engine == "blacklist":
                 flagged, summary = analyze_subtitles(subtitles, command.settings)
-                analysis_engine = "local_rules"
+                analysis_engine = "blacklist"
             else:
                 request_config = describe_llm_request(command.settings)
                 emit_job_log(

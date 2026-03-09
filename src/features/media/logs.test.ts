@@ -1,6 +1,11 @@
 import { describe, expect, it } from "bun:test";
 
-import { DEFAULT_VISIBLE_LOG_LINES, toVisibleLogLines } from "@/features/media/logs";
+import {
+  appendBoundedLogLine,
+  DEFAULT_VISIBLE_LOG_LINES,
+  MAX_STORED_LOG_LINES,
+  toVisibleLogLines,
+} from "@/features/media/logs";
 
 describe("toVisibleLogLines", () => {
   it("should keep only the most recent log lines within the default window", () => {
@@ -18,5 +23,16 @@ describe("toVisibleLogLines", () => {
 
     expect(result.map((line) => line.text)).toEqual(["1", "1", "1"]);
     expect(new Set(result.map((line) => line.id)).size).toBe(3);
+  });
+
+  it("should cap stored log lines to the recent window", () => {
+    const result = Array.from({ length: MAX_STORED_LOG_LINES + 4 }, (_, index) => index).reduce(
+      (logs, index) => appendBoundedLogLine(logs, `line-${index}`),
+      [] as string[],
+    );
+
+    expect(result).toHaveLength(MAX_STORED_LOG_LINES);
+    expect(result.at(0)).toBe("line-4");
+    expect(result.at(-1)).toBe(`line-${MAX_STORED_LOG_LINES + 3}`);
   });
 });

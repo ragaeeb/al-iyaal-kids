@@ -1,7 +1,7 @@
 const isAlphaNumeric = (value: string) => /[\p{L}\p{N}]/u.test(value);
 
 const toJobId = (value: string) => {
-  const normalized = value.toLocaleLowerCase();
+  const normalized = value.toLowerCase();
   const mapped = Array.from(normalized, (character) =>
     isAlphaNumeric(character) ? character : "-",
   ).join("");

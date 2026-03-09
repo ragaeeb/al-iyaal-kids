@@ -1,3 +1,4 @@
+import { appendBoundedLogLine } from "@/features/media/logs";
 import type {
   TaskEvent,
   TaskJobArtifacts,
@@ -56,6 +57,10 @@ export type MediaUiAction =
     }
   | {
       type: "task_cancel_requested";
+      payload: string;
+    }
+  | {
+      type: "task_start_error";
       payload: string;
     }
   | {
@@ -135,7 +140,7 @@ const applyTaskEvent = (task: TaskState, event: TaskEvent): TaskState => {
         job.jobId === event.jobId
           ? {
               ...job,
-              logs: [...job.logs, event.message],
+              logs: appendBoundedLogLine(job.logs, event.message),
             }
           : job,
       ),
@@ -181,14 +186,13 @@ export const createInitialMediaUiState = (): MediaUiState => ({
   workerStatus: "idle",
 });
 
-export const mediaReducer = (state: MediaUiState, action: MediaUiAction): MediaUiState => {
-  if (action.type === "set_selected_input_dir") {
-    return {
-      ...state,
-      selectedInputDir: action.payload,
-    };
-  }
-
+const handleVideoLoadingAction = (
+  state: MediaUiState,
+  action: Extract<
+    MediaUiAction,
+    { type: "load_videos_request" | "load_videos_success" | "load_videos_error" }
+  >,
+): MediaUiState => {
   if (action.type === "load_videos_request") {
     return {
       ...state,
@@ -205,12 +209,27 @@ export const mediaReducer = (state: MediaUiState, action: MediaUiAction): MediaU
     };
   }
 
-  if (action.type === "load_videos_error") {
+  return {
+    ...state,
+    errorMessage: action.payload,
+    isLoadingVideos: false,
+  };
+};
+
+export const mediaReducer = (state: MediaUiState, action: MediaUiAction): MediaUiState => {
+  if (action.type === "set_selected_input_dir") {
     return {
       ...state,
-      errorMessage: action.payload,
-      isLoadingVideos: false,
+      selectedInputDir: action.payload,
     };
+  }
+
+  if (
+    action.type === "load_videos_request" ||
+    action.type === "load_videos_success" ||
+    action.type === "load_videos_error"
+  ) {
+    return handleVideoLoadingAction(state, action);
   }
 
   if (action.type === "select_video") {
@@ -280,7 +299,14 @@ export const mediaReducer = (state: MediaUiState, action: MediaUiAction): MediaU
       },
       workerMessage:
         "Cancellation requested. The worker will stop after the current file finishes.",
-      workerStatus: "starting",
+      workerStatus: state.workerStatus,
+    };
+  }
+
+  if (action.type === "task_start_error") {
+    return {
+      ...state,
+      errorMessage: action.payload,
     };
   }
 

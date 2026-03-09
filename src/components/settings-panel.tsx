@@ -1,29 +1,78 @@
 import { KeyRound } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { getModerationSettings, saveModerationSettings } from "@/features/media/transport";
 import type { ModerationSettings } from "@/features/media/types";
+
+const defaultSettings: ModerationSettings = {
+  amazonNovaApiKey: "",
+  analysisStrategy: "fast",
+  contentCriteria:
+    "1. Adult relationships (kissing, romantic/sexual content, dating)\n2. Bad morals or unethical behavior\n3. Content against Islamic values and aqeedah\n4. Magic, sorcery, or supernatural practices\n5. Music references or musical performances\n6. Violence or frightening content\n7. Inappropriate language or themes",
+  engine: "blacklist",
+  googleApiKey: "",
+  priorityGuidelines:
+    "Priority Guidelines:\n- HIGH: Major aqeedah violations, explicit magic/sorcery, sexual content\n- MEDIUM: Offensive language, questionable behavior, moderate violence\n- LOW: Mild concerns, ambiguous references",
+  profanityWords: [],
+  rules: [
+    {
+      category: "aqeedah",
+      patterns: ["christmas", "xmas", "easter"],
+      priority: "high",
+      reason: "Promotes non-Islamic religious celebration.",
+      ruleId: "aqeedah_christmas",
+    },
+    {
+      category: "magic",
+      patterns: ["spell", "sorcery", "witchcraft"],
+      priority: "high",
+      reason: "References magic or sorcery.",
+      ruleId: "magic_sorcery",
+    },
+    {
+      category: "language",
+      patterns: ["stupid", "idiot", "dumb"],
+      priority: "medium",
+      reason: "Contains offensive language.",
+      ruleId: "offensive_language",
+    },
+  ],
+};
 
 const SettingsPanel = () => {
   const [settings, setSettings] = useState<ModerationSettings | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
-  const loadSettings = useCallback(async () => {
-    setErrorMessage(null);
-    try {
-      const loaded = await getModerationSettings();
-      setSettings(loaded);
-    } catch (error: unknown) {
-      setErrorMessage(error instanceof Error ? error.message : "Failed loading settings.");
-    }
-  }, []);
-
   useEffect(() => {
+    let mounted = true;
+
+    const loadSettings = async () => {
+      setErrorMessage(null);
+      try {
+        const loaded = await getModerationSettings();
+        if (!mounted) {
+          return;
+        }
+        setSettings(loaded);
+      } catch (error: unknown) {
+        if (!mounted) {
+          return;
+        }
+        setSettings(defaultSettings);
+        setErrorMessage(error instanceof Error ? error.message : "Failed loading settings.");
+      }
+    };
+
     loadSettings().catch(() => undefined);
-  }, [loadSettings]);
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const saveSettings = async () => {
     if (!settings) {
@@ -83,23 +132,23 @@ const SettingsPanel = () => {
           </Button>
         </CardHeader>
         <CardContent className="grid gap-4">
-          <label className="space-y-2">
+          <label htmlFor="google-gemini-api-key" className="space-y-2">
             <span className="text-[#8f5e56] text-sm">Google Gemini API Key</span>
-            <input
+            <Input
+              id="google-gemini-api-key"
               type="password"
               value={settings?.googleApiKey ?? ""}
               onChange={(event) => updateGeminiKey(event.currentTarget.value)}
-              className="h-10 w-full rounded-[18px] border border-[#d9b7a5] bg-white px-3 text-[#4f1f1a] text-sm outline-none transition focus:border-[#88322d] focus:ring-[#c57267]/25 focus:ring-[3px]"
               placeholder="AIza..."
             />
           </label>
-          <label className="space-y-2">
+          <label htmlFor="amazon-nova-api-key" className="space-y-2">
             <span className="text-[#8f5e56] text-sm">Amazon Nova API Key</span>
-            <input
+            <Input
+              id="amazon-nova-api-key"
               type="password"
               value={settings?.amazonNovaApiKey ?? ""}
               onChange={(event) => updateNovaKey(event.currentTarget.value)}
-              className="h-10 w-full rounded-[18px] border border-[#d9b7a5] bg-white px-3 text-[#4f1f1a] text-sm outline-none transition focus:border-[#88322d] focus:ring-[#c57267]/25 focus:ring-[3px]"
               placeholder="nova_..."
             />
           </label>

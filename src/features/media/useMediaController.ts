@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer } from "react";
+import { useEffect, useReducer } from "react";
 
 import { openFolderPicker } from "@/features/batch/transport";
 import { MEDIA_ALLOWED_EXTENSIONS } from "@/features/media/constants";
@@ -116,7 +116,7 @@ export const useMediaController = () => {
     } catch (error: unknown) {
       dispatch({
         payload: error instanceof Error ? error.message : "Failed starting transcription batch.",
-        type: "load_videos_error",
+        type: "task_start_error",
       });
     }
   };
@@ -153,7 +153,7 @@ export const useMediaController = () => {
     } catch (error: unknown) {
       dispatch({
         payload: error instanceof Error ? error.message : "Failed starting flag batch.",
-        type: "load_videos_error",
+        type: "task_start_error",
       });
     }
   };
@@ -178,7 +178,7 @@ export const useMediaController = () => {
     } catch (error: unknown) {
       dispatch({
         payload: error instanceof Error ? error.message : "Failed starting cut task.",
-        type: "load_videos_error",
+        type: "task_start_error",
       });
       return null;
     }
@@ -188,14 +188,21 @@ export const useMediaController = () => {
     if (!taskId) {
       return;
     }
-    await cancelTask({
-      mode: "stop_after_current",
-      taskId,
-    });
-    dispatch({
-      payload: taskId,
-      type: "task_cancel_requested",
-    });
+    try {
+      await cancelTask({
+        mode: "stop_after_current",
+        taskId,
+      });
+      dispatch({
+        payload: taskId,
+        type: "task_cancel_requested",
+      });
+    } catch (error: unknown) {
+      dispatch({
+        payload: error instanceof Error ? error.message : "Failed requesting task cancellation.",
+        type: "task_start_error",
+      });
+    }
   };
 
   const cancelActiveTask = async () => {
@@ -209,16 +216,9 @@ export const useMediaController = () => {
     });
   };
 
-  const loadSettings = useCallback(async () => getModerationSettings(), []);
-  const saveSettings = useCallback(
-    async (settings: ModerationSettings) => saveModerationSettings(settings),
-    [],
-  );
-
-  const activeTask = useMemo(
-    () => (state.activeTaskId ? state.tasksById[state.activeTaskId] : null),
-    [state.activeTaskId, state.tasksById],
-  );
+  const loadSettings = async () => getModerationSettings();
+  const saveSettings = async (settings: ModerationSettings) => saveModerationSettings(settings);
+  const activeTask = state.activeTaskId ? state.tasksById[state.activeTaskId] : null;
 
   return {
     activeTask,

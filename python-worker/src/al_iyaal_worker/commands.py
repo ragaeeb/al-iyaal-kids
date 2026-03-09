@@ -111,10 +111,12 @@ def build_ffmpeg_concat_command(
 
 
 def generate_concat_file_content(slice_paths: list[Path]) -> str:
-    return "\n".join(f"file '{slice_path}'" for slice_path in slice_paths)
+    def to_safe_concat_path(slice_path: Path) -> str:
+        sanitized = str(slice_path).replace("\n", "").replace("\r", "")
+        return sanitized.replace("'", "'\\''")
+
+    return "\n".join(f"file '{to_safe_concat_path(slice_path)}'" for slice_path in slice_paths)
 
 
 def build_video_cleaned_output_path(video_path: Path) -> Path:
-    output_dir = video_path.parent / "video_cleaned"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    return output_dir / video_path.name
+    return video_path.parent / "video_cleaned" / video_path.name

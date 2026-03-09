@@ -12,7 +12,7 @@ describe("moderation results", () => {
     const sidecar = parseAnalysisSidecar(
       JSON.stringify({
         createdAt: "2026-03-09T00:00:00.000Z",
-        engine: "local_rules",
+        engine: "blacklist",
         flagged: [
           {
             category: "language",
@@ -49,7 +49,7 @@ describe("moderation results", () => {
       },
       {
         createdAt: "2026-03-09T00:00:00.000Z",
-        engine: "local_rules",
+        engine: "blacklist",
         flagged: [
           {
             category: "aqeedah",

@@ -1,4 +1,4 @@
-import type { ModerationEngine } from "@/features/media/types";
+import type { AnalysisStrategy, ModerationEngine } from "@/features/media/types";
 
 type ModerationEngineOption = {
   description: string;
@@ -28,8 +28,16 @@ const moderationEngineOptions: ModerationEngineOption[] = [
   },
 ];
 
+const moderationEngineValues = moderationEngineOptions.map((option) => option.value);
+const analysisStrategyValues: AnalysisStrategy[] = ["fast", "deep"];
+
 const moderationEngineLabel = (engine: ModerationEngine) =>
   moderationEngineOptions.find((option) => option.value === engine)?.label ?? "Blacklist";
 
-export { moderationEngineLabel, moderationEngineOptions };
+export {
+  analysisStrategyValues,
+  moderationEngineLabel,
+  moderationEngineOptions,
+  moderationEngineValues,
+};
 export type { ModerationEngineOption };

@@ -18,6 +18,13 @@ use crate::{
 const BATCH_EVENT_NAME: &str = "batch-event";
 const TASK_EVENT_NAME: &str = "task-event";
 
+fn is_worker_stderr_error(line: &str) -> bool {
+    let normalized = line.trim().to_ascii_lowercase();
+    ["traceback", "error", "exception", "failed", "fatal", "panic"]
+        .iter()
+        .any(|token| normalized.contains(token))
+}
+
 pub async fn ensure_worker_sender(app: AppHandle, state: AppState) -> Result<crate::state::WorkerSender, String> {
     if let Some(sender) = state.worker_sender().await {
         if !sender.is_closed() {
@@ -221,6 +228,9 @@ async fn spawn_worker_process(
         let mut reader = BufReader::new(stderr).lines();
         while let Ok(Some(line)) = reader.next_line().await {
             eprintln!("worker stderr: {line}");
+            if !is_worker_stderr_error(&line) {
+                continue;
+            }
             let _ = app_for_stderr.emit(
                 BATCH_EVENT_NAME,
                 BatchEvent::worker_status(WorkerStatusKind::Error, format!("worker stderr: {line}")),
@@ -287,4 +297,21 @@ async fn spawn_worker_process(
     });
 
     Ok(tx)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_worker_stderr_error;
+
+    #[test]
+    fn should_treat_tracebacks_as_worker_errors() {
+        assert!(is_worker_stderr_error("Traceback (most recent call last):"));
+        assert!(is_worker_stderr_error("demucs failed with exit code 1"));
+    }
+
+    #[test]
+    fn should_ignore_informational_worker_stderr_lines() {
+        assert!(!is_worker_stderr_error("Using cache found in /Users/test/.cache"));
+        assert!(!is_worker_stderr_error("UserWarning: This path is deprecated."));
+    }
 }

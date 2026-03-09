@@ -1,5 +1,5 @@
 import { Activity, AudioLines, Clock3, Scissors, ShieldAlert, WandSparkles } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { AnalyticsChartCard } from "@/components/layout/analytics-chart-card";
 import { MetricCard } from "@/components/layout/metric-card";
@@ -39,34 +39,65 @@ const emptySnapshot: AnalyticsSnapshot = {
 
 const metricCardIcons = [Activity, WandSparkles, Clock3, ShieldAlert];
 
+const fetchAnalyticsSnapshot = async () => getAnalyticsSnapshot();
+
+const toErrorMessage = (error: unknown) =>
+  error instanceof Error ? error.message : "Failed loading analytics snapshot.";
+
 const AnalyticsPanel = () => {
   const [snapshot, setSnapshot] = useState<AnalyticsSnapshot>(emptySnapshot);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const loadSnapshot = useCallback(async () => {
+  const loadSnapshot = async () => {
     setIsLoading(true);
     setErrorMessage(null);
 
     try {
-      const nextSnapshot = await getAnalyticsSnapshot();
+      const nextSnapshot = await fetchAnalyticsSnapshot();
       setSnapshot(nextSnapshot);
     } catch (error: unknown) {
-      setErrorMessage(
-        error instanceof Error ? error.message : "Failed loading analytics snapshot.",
-      );
+      setErrorMessage(toErrorMessage(error));
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  };
 
   useEffect(() => {
-    loadSnapshot().catch(() => undefined);
-  }, [loadSnapshot]);
+    let mounted = true;
 
-  const metricCards = useMemo(() => toAnalyticsMetricCards(snapshot), [snapshot]);
-  const trendPoints = useMemo(() => createSeededTrend(snapshot), [snapshot]);
-  const breakdown = useMemo(() => toTaskBreakdown(snapshot), [snapshot]);
+    const load = async () => {
+      setIsLoading(true);
+      setErrorMessage(null);
+
+      try {
+        const nextSnapshot = await fetchAnalyticsSnapshot();
+        if (!mounted) {
+          return;
+        }
+        setSnapshot(nextSnapshot);
+      } catch (error: unknown) {
+        if (!mounted) {
+          return;
+        }
+        setErrorMessage(toErrorMessage(error));
+      } finally {
+        if (mounted) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    load().catch(() => undefined);
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const metricCards = toAnalyticsMetricCards(snapshot);
+  const trendPoints = createSeededTrend(snapshot);
+  const breakdown = toTaskBreakdown(snapshot);
   const peakValue = Math.max(...trendPoints.map((point) => point.value), 1);
 
   return (
@@ -110,8 +141,8 @@ const AnalyticsPanel = () => {
 
       <div className="grid grid-cols-[1.35fr_1fr] gap-5">
         <AnalyticsChartCard
-          title="Processing Activity"
-          description="Top-level totals are real. Trend visualization is seeded for the first pass."
+          title="Illustrative Activity Trend"
+          description="Top-level totals are real. This chart is illustrative until historical trend bucketing lands."
         >
           <div className="space-y-5">
             <div className="grid h-72 grid-cols-6 items-end gap-4 rounded-[22px] bg-[linear-gradient(180deg,#fff8f3,#fef4ee)] p-5">

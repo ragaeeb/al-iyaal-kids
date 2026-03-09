@@ -14,6 +14,15 @@ use crate::{
 };
 
 pub type WorkerSender = mpsc::UnboundedSender<crate::protocol::WorkerCommand>;
+const MAX_TASK_JOB_LOG_LINES: usize = 200;
+
+fn push_bounded_log(logs: &mut Vec<String>, message: String) {
+    logs.push(message);
+    if logs.len() > MAX_TASK_JOB_LOG_LINES {
+        let overflow = logs.len() - MAX_TASK_JOB_LOG_LINES;
+        logs.drain(0..overflow);
+    }
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -263,7 +272,7 @@ impl AppState {
                     let mut tasks = self.tasks.lock().await;
                     if let Some(task) = tasks.get_mut(task_id) {
                         if let Some(job) = task.jobs.iter_mut().find(|job| job.job_id == *job_id) {
-                            job.logs.push(message.clone());
+                            push_bounded_log(&mut job.logs, message.clone());
                         }
                     }
                 }
@@ -292,7 +301,7 @@ mod tests {
         },
     };
 
-    use super::AppState;
+    use super::{push_bounded_log, AppState, MAX_TASK_JOB_LOG_LINES};
 
     fn seed_batch() -> BatchState {
         BatchState {
@@ -404,5 +413,20 @@ mod tests {
 
         assert!(state.take_batch_started_at("batch-1").await.is_some());
         assert!(state.take_task_started_at("task-1").await.is_some());
+    }
+
+    #[test]
+    fn should_cap_task_job_logs_to_recent_entries() {
+        let mut logs = Vec::new();
+        for index in 0..(MAX_TASK_JOB_LOG_LINES + 5) {
+            push_bounded_log(&mut logs, format!("line-{index}"));
+        }
+
+        assert_eq!(logs.len(), MAX_TASK_JOB_LOG_LINES);
+        assert_eq!(logs.first().unwrap(), "line-5");
+        assert_eq!(
+            logs.last().unwrap(),
+            &format!("line-{}", MAX_TASK_JOB_LOG_LINES + 4)
+        );
     }
 }

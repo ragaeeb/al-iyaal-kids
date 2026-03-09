@@ -9,7 +9,7 @@ import {
   Sparkles,
   Trash2,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { LogOutput } from "@/components/log-output";
 import { ModerationSettingsPanel } from "@/components/moderation-settings-panel";
@@ -18,6 +18,11 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatTime } from "@/features/editor/subtitles";
+import {
+  buildModerationResults,
+  getLatestTask,
+  getLatestTaskLogLine,
+} from "@/features/media/selectors";
 import { listSrtFiles, readTextFile } from "@/features/media/transport";
 import type {
   AnalysisSidecar,
@@ -89,6 +94,18 @@ const toWorkerStatusVariant = (workerStatus: MediaController["state"]["workerSta
   return "running" as const;
 };
 
+const toTaskStatusVariant = (status: TaskState["status"]) => {
+  if (status === "completed") {
+    return "completed" as const;
+  }
+
+  if (status === "cancelled") {
+    return "cancelled" as const;
+  }
+
+  return "running" as const;
+};
+
 const toCompletionMessage = (
   taskStatus: MediaController["state"]["tasksById"][string]["status"] | undefined,
   totalFlagged: number,
@@ -119,28 +136,44 @@ const toCompletionMessage = (
   return "Run local detection to generate analysis sidecars and review flagged lines.";
 };
 
-const getPendingAnalysisJobs = (
+const loadAnalysisSidecars = async (
   jobs: NonNullable<MediaController["state"]["tasksById"][string]>["jobs"] | undefined,
-  analysisByJobId: Record<string, AnalysisSidecar>,
+  loadedJobIds: Set<string>,
+  onSidecar: (jobId: string, sidecar: AnalysisSidecar) => void,
+  onError: (message: string) => void,
 ) => {
-  return (jobs ?? []).filter(
+  const jobsToLoad = (jobs ?? []).filter(
     (job) =>
       job.status === "completed" &&
       typeof job.outputPath === "string" &&
-      !analysisByJobId[job.jobId],
+      job.outputPath.length > 0 &&
+      !loadedJobIds.has(job.jobId),
   );
-};
 
-const loadAnalysisSidecars = async (
-  jobs: NonNullable<MediaController["state"]["tasksById"][string]>["jobs"] | undefined,
-  analysisByJobId: Record<string, AnalysisSidecar>,
-  onSidecar: (jobId: string, sidecar: AnalysisSidecar) => void,
-) => {
-  const jobsToLoad = getPendingAnalysisJobs(jobs, analysisByJobId);
+  const results = await Promise.allSettled(
+    jobsToLoad.map(async (job) => {
+      const content = await readTextFile(job.outputPath ?? "");
+      return {
+        jobId: job.jobId,
+        sidecar: parseAnalysisSidecar(content),
+      };
+    }),
+  );
 
-  for (const job of jobsToLoad) {
-    const content = await readTextFile(job.outputPath ?? "");
-    onSidecar(job.jobId, parseAnalysisSidecar(content));
+  const loadedSidecars = results.filter(
+    (result): result is PromiseFulfilledResult<{ jobId: string; sidecar: AnalysisSidecar }> =>
+      result.status === "fulfilled",
+  );
+  const failedCount = results.length - loadedSidecars.length;
+
+  for (const result of loadedSidecars) {
+    onSidecar(result.value.jobId, result.value.sidecar);
+  }
+
+  if (failedCount > 0) {
+    onError(
+      `Loaded ${loadedSidecars.length} analysis sidecar(s). ${failedCount} sidecar read(s) failed.`,
+    );
   }
 };
 
@@ -181,9 +214,7 @@ const DetectionTaskDrawerContent = ({ flagTask }: DetectionTaskDrawerContentProp
           <p className="text-[#8f5e56] text-sm">Task Status</p>
           <p className="mt-1 font-medium text-[#5b2722] text-sm">{flagTask.taskId}</p>
         </div>
-        <Badge variant={flagTask.status === "completed" ? "completed" : "running"}>
-          {flagTask.status}
-        </Badge>
+        <Badge variant={toTaskStatusVariant(flagTask.status)}>{flagTask.status}</Badge>
       </div>
       {flagTask.cancelRequested ? (
         <div className="rounded-[18px] border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900 text-sm">
@@ -460,25 +491,20 @@ const ProfanityPanel = ({ controller }: ProfanityPanelProps) => {
   const [engine, setEngine] = useState<ModerationEngine>("blacklist");
   const [analysisStrategy, setAnalysisStrategy] = useState<AnalysisStrategy>("fast");
   const previousTaskIdRef = useRef<string | null>(null);
+  const loadedJobIdsRef = useRef<Set<string>>(new Set());
+  const loadSettingsRef = useRef(controller.loadSettings);
+  loadSettingsRef.current = controller.loadSettings;
 
-  const flagTask = useMemo(() => {
-    return Object.values(controller.state.tasksById)
-      .filter((task) => task.taskKind === "flag")
-      .at(-1);
-  }, [controller.state.tasksById]);
-
+  const flagTask = getLatestTask(controller.state.tasksById, "flag");
   const taskActivity = toTaskActivity(flagTask?.status, controller.state.workerStatus);
-  const latestLogLine = flagTask?.jobs
-    .flatMap((job) => job.logs)
-    .filter(Boolean)
-    .at(-1);
+  const latestLogLine = getLatestTaskLogLine(flagTask);
 
   useEffect(() => {
     let mounted = true;
 
     const load = async () => {
       try {
-        const loaded = await controller.loadSettings();
+        const loaded = await loadSettingsRef.current();
         if (!mounted) {
           return;
         }
@@ -500,7 +526,7 @@ const ProfanityPanel = ({ controller }: ProfanityPanelProps) => {
     return () => {
       mounted = false;
     };
-  }, [controller.loadSettings]);
+  }, []);
 
   useEffect(() => {
     const nextTaskId = flagTask?.taskId ?? null;
@@ -510,42 +536,51 @@ const ProfanityPanel = ({ controller }: ProfanityPanelProps) => {
 
     previousTaskIdRef.current = nextTaskId;
     setAnalysisByJobId({});
+    loadedJobIdsRef.current = new Set();
   }, [flagTask?.taskId]);
 
   useEffect(() => {
     let cancelled = false;
 
-    loadAnalysisSidecars(flagTask?.jobs, analysisByJobId, (jobId, sidecar) => {
-      if (cancelled) {
-        return;
+    loadAnalysisSidecars(
+      flagTask?.jobs,
+      loadedJobIdsRef.current,
+      (jobId, sidecar) => {
+        if (cancelled) {
+          return;
+        }
+        loadedJobIdsRef.current.add(jobId);
+        setAnalysisByJobId((previous) => ({
+          ...previous,
+          [jobId]: sidecar,
+        }));
+      },
+      (message) => {
+        if (!cancelled) {
+          setSettingsError(message);
+        }
+      },
+    ).catch((error: unknown) => {
+      if (!cancelled) {
+        setSettingsError(
+          error instanceof Error ? error.message : "Failed loading analysis sidecars.",
+        );
       }
-      setAnalysisByJobId((previous) => ({
-        ...previous,
-        [jobId]: sidecar,
-      }));
-    }).catch(() => undefined);
+    });
 
     return () => {
       cancelled = true;
     };
-  }, [analysisByJobId, flagTask?.jobs]);
+  }, [flagTask?.jobs]);
 
-  const moderationResults = useMemo(() => {
-    const taskResults = (flagTask?.jobs ?? []).map((job) =>
-      toModerationJobResult(job, analysisByJobId[job.jobId]),
-    );
-    const taskResultIds = new Set(taskResults.map((result) => result.jobId));
-    const loadedResults = Object.values(manualResults)
-      .map(toManualJobResult)
-      .filter((result) => !taskResultIds.has(result.jobId));
-
-    return [...taskResults, ...loadedResults];
-  }, [analysisByJobId, flagTask?.jobs, manualResults]);
-
-  const moderationOverview = useMemo(
-    () => buildModerationOverview(moderationResults),
-    [moderationResults],
+  const moderationResults = buildModerationResults(
+    flagTask,
+    analysisByJobId,
+    manualResults,
+    toModerationJobResult,
+    toManualJobResult,
   );
+  const moderationOverview = buildModerationOverview(moderationResults);
 
   const addSrtFiles = async () => {
     const response = await open({
@@ -583,7 +618,7 @@ const ProfanityPanel = ({ controller }: ProfanityPanelProps) => {
     setSettingsError(null);
 
     try {
-      const loadedEntries = await Promise.all(
+      const results = await Promise.allSettled(
         selectedSrtPaths.map(async (sourcePath) => {
           const sidecarPath = toAnalysisPath(sourcePath);
           const content = await readTextFile(sidecarPath);
@@ -594,6 +629,13 @@ const ProfanityPanel = ({ controller }: ProfanityPanelProps) => {
           } satisfies ManualAnalysisResult;
         }),
       );
+      const loadedEntries = results
+        .filter(
+          (result): result is PromiseFulfilledResult<ManualAnalysisResult> =>
+            result.status === "fulfilled",
+        )
+        .map((result) => result.value);
+      const failedCount = results.filter((result) => result.status === "rejected").length;
 
       setManualResults((previous) => {
         const next = { ...previous };
@@ -602,6 +644,12 @@ const ProfanityPanel = ({ controller }: ProfanityPanelProps) => {
         }
         return next;
       });
+
+      if (failedCount > 0) {
+        setSettingsError(
+          `Loaded ${loadedEntries.length} file(s). ${failedCount} file(s) could not be loaded.`,
+        );
+      }
     } catch (error: unknown) {
       setSettingsError(
         error instanceof Error

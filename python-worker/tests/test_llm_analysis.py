@@ -1,9 +1,13 @@
+import json
+
 from al_iyaal_worker.moderation.llm import (
     _build_analysis_prompt,
     _enrich_flagged_items,
     _parse_llm_json,
+    _validate_priority,
     describe_llm_request,
 )
+import pytest
 from al_iyaal_worker.subtitles import SubtitleEntry
 
 
@@ -54,3 +58,53 @@ def test_should_describe_gemini_fast_request_config() -> None:
     assert request_config.model == "gemini-2.5-flash"
     assert "generativelanguage.googleapis.com" in request_config.endpoint
     assert request_config.strategy == "fast"
+
+
+def test_should_describe_nova_pro_deep_request_config() -> None:
+    request_config = describe_llm_request({"analysisStrategy": "deep", "engine": "nova_pro"})
+
+    assert request_config.engine == "nova_pro"
+    assert request_config.model == "nova-pro-v1"
+    assert request_config.endpoint == "https://api.nova.amazon.com/v1/chat/completions"
+    assert request_config.strategy == "deep"
+
+
+def test_should_describe_nova_fast_request_config() -> None:
+    request_config = describe_llm_request({"analysisStrategy": "fast", "engine": "nova_pro"})
+
+    assert request_config.engine == "nova_pro"
+    assert request_config.model == "nova-2-lite-v1"
+    assert request_config.endpoint == "https://api.nova.amazon.com/v1/chat/completions"
+    assert request_config.strategy == "fast"
+
+
+def test_should_raise_for_unsupported_llm_engine() -> None:
+    with pytest.raises(ValueError, match="Unsupported LLM engine"):
+        describe_llm_request({"analysisStrategy": "fast", "engine": "unknown"})
+
+
+def test_should_raise_for_malformed_llm_json() -> None:
+    with pytest.raises(json.JSONDecodeError):
+        _parse_llm_json("{not valid json}")
+
+
+def test_should_raise_for_fenced_non_json_payload() -> None:
+    with pytest.raises(json.JSONDecodeError):
+        _parse_llm_json("```text\nnot json\n```")
+
+
+def test_should_raise_when_flagged_field_is_missing() -> None:
+    with pytest.raises(ValueError, match="flagged\\[] and summary"):
+        _parse_llm_json('{"summary":"ok"}')
+
+
+def test_should_raise_when_summary_field_is_missing() -> None:
+    with pytest.raises(ValueError, match="flagged\\[] and summary"):
+        _parse_llm_json('{"flagged":[]}')
+
+
+def test_should_normalize_invalid_priority_to_medium() -> None:
+    assert _validate_priority("urgent") == "medium"
+    assert _validate_priority("") == "medium"
+    assert _validate_priority(None) == "medium"
+    assert _validate_priority(" HIGH ") == "high"

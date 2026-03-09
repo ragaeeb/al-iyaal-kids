@@ -7,7 +7,7 @@ Last updated: February 16, 2026
 ## What we collect
 
 - We do not collect personal information.
-- We do not collect analytics or telemetry in the MVP.
+- We do not collect analytics or telemetry in the MVP. The analytics tab is local specifically for your viewing.
 - We do not upload your media files to our servers.
 
 ## How data is processed

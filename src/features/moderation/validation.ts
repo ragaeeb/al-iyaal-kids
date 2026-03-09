@@ -4,15 +4,16 @@ import type {
   ModerationRule,
   ModerationSettings,
 } from "@/features/media/types";
+import { analysisStrategyValues, moderationEngineValues } from "@/features/moderation/engines";
 
 const isPriority = (value: string): value is "high" | "medium" | "low" =>
   value === "high" || value === "medium" || value === "low";
 
 const isEngine = (value: string): value is ModerationEngine =>
-  value === "blacklist" || value === "gemini" || value === "nova_pro";
+  moderationEngineValues.includes(value as ModerationEngine);
 
 const isAnalysisStrategy = (value: string): value is AnalysisStrategy =>
-  value === "fast" || value === "deep";
+  analysisStrategyValues.includes(value as AnalysisStrategy);
 
 const isRule = (value: unknown): value is ModerationRule => {
   if (!value || typeof value !== "object") {

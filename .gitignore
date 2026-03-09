@@ -39,3 +39,4 @@ src-tauri/icons/*
 *.njsproj
 *.sln
 *.sw?
+vite-env.d.ts

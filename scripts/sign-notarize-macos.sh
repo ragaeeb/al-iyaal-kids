@@ -166,7 +166,7 @@ staple_dmg() {
   xcrun stapler validate -v "$dmg_path" 2>&1 | tee "$LOG_DIR/stapler-dmg-validate.log"
 
   log "Assessing stapled DMG with Gatekeeper"
-  spctl -a -vv -t install "$dmg_path" 2>&1 | tee "$LOG_DIR/spctl-dmg.log" || true
+  spctl -a -vv -t install "$dmg_path" 2>&1 | tee "$LOG_DIR/spctl-dmg.log"
 }
 
 main() {

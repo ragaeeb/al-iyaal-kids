@@ -130,7 +130,7 @@ const RemoveMusicPanel = ({
                 variant={
                   workerStatus === "error"
                     ? "failed"
-                    : workerStatus === "ready"
+                    : workerStatus === "ready" || workerStatus === "stopped"
                       ? "completed"
                       : "running"
                 }

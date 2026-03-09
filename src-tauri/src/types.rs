@@ -230,6 +230,7 @@ pub struct TaskCancelAck {
 pub enum WorkerStatusKind {
     Starting,
     Ready,
+    Stopped,
     Error,
 }
 

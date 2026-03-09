@@ -51,6 +51,22 @@ def test_should_enrich_flagged_items_with_subtitle_text_and_times() -> None:
     assert enriched[0]["ruleId"] == "gemini"
 
 
+def test_should_enrich_flagged_items_when_subtitles_are_unsorted() -> None:
+    subtitles = [
+        SubtitleEntry(index=2, start_time=6.0, end_time=7.0, text="Second"),
+        SubtitleEntry(index=1, start_time=3.2, end_time=4.0, text="First"),
+    ]
+
+    enriched = _enrich_flagged_items(
+        "gemini",
+        subtitles,
+        [{"startTime": 3.2, "reason": "aqeedah", "priority": "high"}],
+    )
+
+    assert enriched[0]["text"] == "First"
+    assert enriched[0]["startTime"] == 3.2
+
+
 def test_should_describe_gemini_fast_request_config() -> None:
     request_config = describe_llm_request({"analysisStrategy": "fast", "engine": "gemini"})
 

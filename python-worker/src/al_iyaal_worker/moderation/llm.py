@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from bisect import bisect_left
 from dataclasses import dataclass
 from typing import Any
 from urllib import parse, request
@@ -107,8 +108,16 @@ def _parse_llm_json(raw_text: str) -> dict[str, Any]:
     return payload
 
 
-def _find_subtitle(subtitles: list[SubtitleEntry], start_time: float) -> SubtitleEntry | None:
-    for subtitle in subtitles:
+def _find_subtitle(
+    subtitles: list[SubtitleEntry], start_times: list[float], start_time: float
+) -> SubtitleEntry | None:
+    index = bisect_left(start_times, start_time)
+    candidate_indexes = [index - 1, index, index + 1]
+    for candidate_index in candidate_indexes:
+        if candidate_index < 0 or candidate_index >= len(subtitles):
+            continue
+
+        subtitle = subtitles[candidate_index]
         if abs(subtitle.start_time - start_time) <= 0.15:
             return subtitle
     return None
@@ -120,10 +129,12 @@ def _enrich_flagged_items(
     flagged_items: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     enriched: list[dict[str, Any]] = []
+    sorted_subtitles = sorted(subtitles, key=lambda subtitle: subtitle.start_time)
+    start_times = [subtitle.start_time for subtitle in sorted_subtitles]
 
     for item in flagged_items:
         start_time = float(item.get("startTime", 0))
-        subtitle = _find_subtitle(subtitles, start_time)
+        subtitle = _find_subtitle(sorted_subtitles, start_times, start_time)
         text = subtitle.text if subtitle else str(item.get("text", "")).strip()
         enriched.append(
             {

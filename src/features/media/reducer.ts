@@ -17,7 +17,7 @@ export type MediaUiState = {
   activeTaskId: string | null;
   tasksById: Record<string, TaskState>;
   selectedVideoPath: string | null;
-  workerStatus: "idle" | "starting" | "ready" | "error";
+  workerStatus: "idle" | "starting" | "ready" | "stopped" | "error";
   workerMessage: string;
   errorMessage: string | null;
   removeMusicSnapshot: Record<string, string>;

@@ -32,6 +32,7 @@ export type AnalyticsSnapshot = {
 };
 
 export type AnalyticsMetricCard = {
+  icon: "activity" | "clock" | "shield" | "wand";
   label: string;
   value: string;
   hint: string;

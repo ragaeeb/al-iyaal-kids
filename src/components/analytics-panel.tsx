@@ -19,6 +19,13 @@ const taskKindIcon = {
   transcription: AudioLines,
 };
 
+const metricCardIconByKey = {
+  activity: Activity,
+  clock: Clock3,
+  shield: ShieldAlert,
+  wand: WandSparkles,
+};
+
 const emptySnapshot: AnalyticsSnapshot = {
   breakdown: [],
   recentRuns: 0,
@@ -36,8 +43,6 @@ const emptySnapshot: AnalyticsSnapshot = {
     totalTranscriptionJobs: 0,
   },
 };
-
-const metricCardIcons = [Activity, WandSparkles, Clock3, ShieldAlert];
 
 const fetchAnalyticsSnapshot = async () => getAnalyticsSnapshot();
 
@@ -103,8 +108,8 @@ const AnalyticsPanel = () => {
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-4 gap-4">
-        {metricCards.map((card, index) => {
-          const Icon = metricCardIcons[index] ?? Activity;
+        {metricCards.map((card) => {
+          const Icon = metricCardIconByKey[card.icon] ?? Activity;
 
           return (
             <MetricCard

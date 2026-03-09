@@ -72,7 +72,12 @@ export const parseClockValueToSeconds = (value: string) => {
 };
 
 export const findSubtitleAtTime = (subtitles: SubtitleEntry[], currentTime: number) => {
-  return subtitles.find(
-    (subtitle) => currentTime >= subtitle.startTime && currentTime <= subtitle.endTime,
-  );
+  for (let index = subtitles.length - 1; index >= 0; index -= 1) {
+    const subtitle = subtitles[index];
+    if (subtitle && currentTime >= subtitle.startTime && currentTime <= subtitle.endTime) {
+      return subtitle;
+    }
+  }
+
+  return undefined;
 };

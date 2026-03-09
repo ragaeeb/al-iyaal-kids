@@ -52,7 +52,7 @@ const toWorkerStatusVariant = (workerStatus: MediaController["state"]["workerSta
     return "failed" as const;
   }
 
-  if (workerStatus === "ready") {
+  if (workerStatus === "ready" || workerStatus === "stopped") {
     return "completed" as const;
   }
 

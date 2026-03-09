@@ -5,8 +5,10 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
+use tokio::sync::Mutex;
 
 use crate::types::{
     AnalyticsSnapshot, AnalyticsTaskKind, AnalyticsTaskKindBreakdown, AnalyticsTotals,
@@ -18,6 +20,8 @@ use crate::types::{
 struct AnalyticsStore {
     records: Vec<AnalyticsWorkRecord>,
 }
+
+static ANALYTICS_STORE_LOCK: Mutex<()> = Mutex::const_new(());
 
 fn analytics_store_path_from_dir(base_dir: &Path) -> PathBuf {
     base_dir.join("analytics/history.json")
@@ -129,9 +133,39 @@ fn duration_minutes(started_at_epoch_seconds: Option<u64>) -> u64 {
 }
 
 fn append_record(path: &Path, record: AnalyticsWorkRecord) -> Result<(), String> {
+    let _guard = ANALYTICS_STORE_LOCK.blocking_lock();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "Failed creating analytics directory {}: {error}",
+                parent.display()
+            )
+        })?;
+    }
+
+    let lock_path = path.with_extension("lock");
+    let lock_file = fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .map_err(|error| format!("Failed opening analytics lock {}: {error}", lock_path.display()))?;
+    lock_file
+        .lock_exclusive()
+        .map_err(|error| format!("Failed locking analytics store {}: {error}", lock_path.display()))?;
+
     let mut store = read_store(path)?;
     store.records.push(record);
-    write_store(path, &store)
+    let write_result = write_store(path, &store);
+    let unlock_result = lock_file.unlock().map_err(|error| {
+        format!(
+            "Failed unlocking analytics store {}: {error}",
+            lock_path.display()
+        )
+    });
+
+    write_result?;
+    unlock_result
 }
 
 fn flagged_count_from_artifacts(value: &Option<serde_json::Value>) -> usize {
@@ -272,7 +306,7 @@ pub fn record_task_completion(
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::{path::PathBuf, sync::Arc};
 
     use uuid::Uuid;
 
@@ -355,6 +389,27 @@ mod tests {
         assert_eq!(snapshot.totals.total_flag_jobs, 1);
         assert_eq!(snapshot.totals.total_flagged_items, 3);
         assert_eq!(snapshot.totals.total_files_with_flags, 1);
+    }
+
+    #[test]
+    fn should_append_analytics_records_without_losing_concurrent_writes() {
+        let base_dir = temp_path();
+        let path = analytics_store_path_from_dir(&base_dir);
+        let shared_path = Arc::new(path.clone());
+
+        let handles = (0..8)
+            .map(|_| {
+                let thread_path = Arc::clone(&shared_path);
+                std::thread::spawn(move || append_record(&thread_path, create_batch_record(&seed_batch(), Some(1))))
+            })
+            .collect::<Vec<_>>();
+
+        for handle in handles {
+            handle.join().unwrap().unwrap();
+        }
+
+        let store = read_store(&path).unwrap();
+        assert_eq!(store.records.len(), 8);
     }
 
     #[test]

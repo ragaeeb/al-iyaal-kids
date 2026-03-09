@@ -56,4 +56,16 @@ describe("findSubtitleAtTime", () => {
     );
     expect(result?.text).toBe("First line");
   });
+
+  it("should return the later subtitle when cues share a boundary", () => {
+    const result = findSubtitleAtTime(
+      [
+        { endTime: 2, index: 1, startTime: 0, text: "First line" },
+        { endTime: 5, index: 2, startTime: 2, text: "Second line" },
+      ],
+      2,
+    );
+
+    expect(result?.text).toBe("Second line");
+  });
 });

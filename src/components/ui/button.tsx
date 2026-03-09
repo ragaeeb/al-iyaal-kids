@@ -22,8 +22,6 @@ const buttonVariants = cva(
       variant: {
         danger:
           "border-rose-700 bg-rose-700 text-white shadow-[0_14px_28px_rgba(190,24,93,0.22)] hover:border-rose-600 hover:bg-rose-600",
-        destructive:
-          "border-rose-700 bg-rose-700 text-white shadow-[0_14px_28px_rgba(190,24,93,0.22)] hover:border-rose-600 hover:bg-rose-600",
         ghost:
           "border-transparent bg-transparent text-[#71443c] hover:bg-[#f8e9de] hover:text-[#88322d]",
         link: "border-transparent bg-transparent px-0 text-[#88322d] underline-offset-4 hover:underline",

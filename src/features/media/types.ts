@@ -177,7 +177,7 @@ export type TaskEvent =
     }
   | {
       type: "worker_status";
-      status: "ready" | "starting" | "error";
+      status: "ready" | "starting" | "stopped" | "error";
       message: string;
     };
 

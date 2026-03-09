@@ -48,21 +48,25 @@ export const toAnalyticsMetricCards = (snapshot: AnalyticsSnapshot): AnalyticsMe
   return [
     {
       hint: `${totals.successCount} successful completions`,
+      icon: "activity",
       label: "Media Processed",
       value: totals.totalMediaProcessed.toString(),
     },
     {
       hint: `${snapshot.recentRuns} completed runs recorded`,
+      icon: "wand",
       label: "Workflow Runs",
       value: totalRuns.toString(),
     },
     {
       hint: `${totals.failureCount} failed, ${totals.cancelledCount} cancelled`,
+      icon: "clock",
       label: "Processing Time",
       value: formatMinutes(totals.cumulativeProcessingMinutes),
     },
     {
       hint: "Local-only analytics stored on this machine",
+      icon: "shield",
       label: "Success Rate",
       value:
         totals.totalMediaProcessed === 0

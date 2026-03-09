@@ -59,7 +59,10 @@ const toPathList = (value: string | string[] | null): string[] => {
   return Array.isArray(value) ? value : [value];
 };
 
-const toFileName = (path: string) => path.split("/").at(-1) ?? path;
+const toFileName = (path: string) => {
+  const normalized = path.replace(/[\\/]+$/, "");
+  return normalized.split(/[\\/]/).at(-1) ?? normalized;
+};
 
 const dedupePaths = (paths: string[]) => Array.from(new Set(paths));
 
@@ -87,7 +90,7 @@ const toWorkerStatusVariant = (workerStatus: MediaController["state"]["workerSta
     return "failed" as const;
   }
 
-  if (workerStatus === "ready") {
+  if (workerStatus === "ready" || workerStatus === "stopped") {
     return "completed" as const;
   }
 

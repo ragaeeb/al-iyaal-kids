@@ -23,8 +23,11 @@ const toVisibleLogLines = (
   logs: string[],
   maxLines = DEFAULT_VISIBLE_LOG_LINES,
 ): VisibleLogLine[] => {
-  return logs.slice(-maxLines).map((text, index, visibleLogs) => ({
-    id: `${visibleLogs.length}-${index}-${text}`,
+  const visibleLogs = logs.slice(-maxLines);
+  const offset = logs.length - visibleLogs.length;
+
+  return visibleLogs.map((text, index) => ({
+    id: `log-${offset + index}`,
     text,
   }));
 };

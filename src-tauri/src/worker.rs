@@ -278,12 +278,12 @@ async fn spawn_worker_process(
         let batch_status = if is_error {
             WorkerStatusKind::Error
         } else {
-            WorkerStatusKind::Ready
+            WorkerStatusKind::Stopped
         };
         let task_status = if is_error {
             WorkerStatusKind::Error
         } else {
-            WorkerStatusKind::Ready
+            WorkerStatusKind::Stopped
         };
 
         let _ = app_for_wait.emit(

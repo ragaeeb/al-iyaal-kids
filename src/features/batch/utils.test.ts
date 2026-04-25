@@ -4,6 +4,7 @@ import {
   buildStartBatchRequest,
   clampProgress,
   createQueuedJobs,
+  dedupePaths,
   isSupportedVideoPath,
   toAllowedExtensions,
 } from "@/features/batch/utils";
@@ -11,13 +12,19 @@ import { toJobId } from "@/features/shared/job-id";
 
 describe("batch utils", () => {
   it("should build a start batch request with canonical defaults", () => {
-    const result = buildStartBatchRequest("  /tmp/example  ");
+    const result = buildStartBatchRequest(["  /tmp/example.mp4  ", "/tmp/example.mp4"]);
 
     expect(result).toEqual({
       allowedExtensions: [".mp4", ".mov"],
-      inputDir: "/tmp/example",
+      inputPaths: ["/tmp/example.mp4"],
       outputDirMode: "audio_replaced_default",
     });
+  });
+
+  it("should dedupe and trim selected paths", () => {
+    const result = dedupePaths([" /tmp/a.mp4 ", "", "/tmp/a.mp4", "/tmp/b.mov"]);
+
+    expect(result).toEqual(["/tmp/a.mp4", "/tmp/b.mov"]);
   });
 
   it("should mark only mp4/mov as supported video paths", () => {

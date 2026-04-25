@@ -1,21 +1,6 @@
-import {
-  AudioLines,
-  ChartColumn,
-  LayoutGrid,
-  Scissors,
-  Settings2,
-  ShieldAlert,
-  WandSparkles,
-} from "lucide-react";
+import { ChartColumn, LayoutGrid, Scissors, Settings2, WandSparkles } from "lucide-react";
 
-export type AppPage =
-  | "dashboard"
-  | "remove-music"
-  | "transcribe"
-  | "profanity-detection"
-  | "cut-video"
-  | "analytics"
-  | "settings";
+export type AppPage = "dashboard" | "remove-music" | "cut-video" | "analytics" | "settings";
 
 export type AppPageDefinition = {
   key: AppPage;
@@ -25,7 +10,7 @@ export type AppPageDefinition = {
 };
 
 export const dashboardPage: AppPageDefinition = {
-  description: "Overview, app identity, privacy posture, and quick entry points.",
+  description: "App overview and privacy summary.",
   icon: LayoutGrid,
   key: "dashboard",
   label: "Dashboard",
@@ -33,37 +18,25 @@ export const dashboardPage: AppPageDefinition = {
 
 export const appPages: AppPageDefinition[] = [
   {
-    description: "Demucs vocals-only remux batches for local media folders.",
+    description: "Remove background music.",
     icon: WandSparkles,
     key: "remove-music",
     label: "Remove Music",
   },
   {
-    description: "Generate subtitle sidecars from one or more videos.",
-    icon: AudioLines,
-    key: "transcribe",
-    label: "Transcribe",
-  },
-  {
-    description: "Analyze SRT files locally for profanity and aqeedah flags.",
-    icon: ShieldAlert,
-    key: "profanity-detection",
-    label: "Profanity Detection",
-  },
-  {
-    description: "Review a video and export exact cut ranges.",
+    description: "Review, subtitle, flag, and export.",
     icon: Scissors,
     key: "cut-video",
-    label: "Cut Video",
+    label: "Edit Video",
   },
   {
-    description: "Track local processing metrics and recent workflow activity.",
+    description: "Processing stats and history.",
     icon: ChartColumn,
     key: "analytics",
     label: "Analytics",
   },
   {
-    description: "Manage local AI provider keys and analysis preferences.",
+    description: "AI keys and preferences.",
     icon: Settings2,
     key: "settings",
     label: "Settings",

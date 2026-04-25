@@ -66,6 +66,7 @@ def parse_worker_command(raw_line: str) -> WorkerCommand:
             video_path=str(payload["videoPath"]),
             ranges=ranges,
             output_mode=str(payload.get("outputMode", "video_cleaned_default")),
+            compression_preset=str(payload.get("compressionPreset", "max_compression")),
         )
 
     if command_type == "cancel_batch":

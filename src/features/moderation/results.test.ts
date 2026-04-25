@@ -30,7 +30,60 @@ describe("moderation results", () => {
     );
 
     expect(sidecar.flagged).toHaveLength(1);
+    expect(sidecar.flagged[0]?.startTime).toBe(10);
+    expect(sidecar.flagged[0]?.endTime).toBe(11);
     expect(sidecar.summary).toContain("Flagged 1");
+  });
+
+  it("should normalize string timestamps in flagged segments", () => {
+    const sidecar = parseAnalysisSidecar(
+      JSON.stringify({
+        createdAt: "2026-03-09T00:00:00.000Z",
+        engine: "blacklist",
+        flagged: [
+          {
+            category: "language",
+            endTime: "11",
+            priority: "medium",
+            reason: "Contains profanity or offensive language.",
+            ruleId: "profanity",
+            startTime: "10",
+            text: "bad word here",
+          },
+        ],
+        summary: "Flagged 1 subtitle item(s). high=0, medium=1, low=0.",
+        videoFileName: "episode.srt",
+      }),
+    );
+
+    expect(sidecar.flagged[0]?.startTime).toBe(10);
+    expect(sidecar.flagged[0]?.endTime).toBe(11);
+  });
+
+  it("should parse flagged segments that only provide start times", () => {
+    const sidecar = parseAnalysisSidecar(
+      JSON.stringify({
+        createdAt: "2026-01-13T18:14:11.018Z",
+        flagged: [
+          {
+            priority: "low",
+            reason: "Musical performance (intro theme song).",
+            startTime: 12,
+          },
+        ],
+        models: ["gemini-3-flash-preview"],
+        strategy: "fast",
+        summary: "Flagged 1 subtitle item(s).",
+        timestamp: "2026-01-13T18:14:11.018Z",
+        videoFileName:
+          "adventures-from-the-book-of-virtues-season-1-episode-03-responsibility_360.mp4",
+      }),
+    );
+
+    expect(sidecar.flagged).toHaveLength(1);
+    expect(sidecar.flagged[0]?.startTime).toBe(12);
+    expect(sidecar.flagged[0]?.endTime).toBeUndefined();
+    expect(sidecar.flagged[0]?.reason).toContain("Musical performance");
   });
 
   it("should derive a job result from sidecar data before falling back to artifacts", () => {

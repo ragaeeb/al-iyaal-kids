@@ -1,3 +1,5 @@
+import type { DragDropEvent } from "@tauri-apps/api/window";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   Brain,
@@ -9,7 +11,7 @@ import {
   Sparkles,
   Trash2,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { type RefObject, useEffect, useRef, useState } from "react";
 
 import { LogOutput } from "@/components/log-output";
 import { ModerationSettingsPanel } from "@/components/moderation-settings-panel";
@@ -44,6 +46,7 @@ type MediaController = ReturnType<typeof useMediaController>;
 
 type ProfanityPanelProps = {
   controller: MediaController;
+  isActive: boolean;
 };
 
 type ManualAnalysisResult = {
@@ -67,6 +70,25 @@ const toFileName = (path: string) => {
 const dedupePaths = (paths: string[]) => Array.from(new Set(paths));
 
 const toAnalysisPath = (path: string) => path.replace(/\.srt$/i, ".analysis.json");
+const isSupportedSrtPath = (path: string) => /\.srt$/i.test(path);
+
+const isWithinDropTarget = (
+  targetRef: RefObject<HTMLDivElement | null>,
+  position: { x: number; y: number },
+) => {
+  const element = targetRef.current;
+  if (!element) {
+    return false;
+  }
+
+  const rect = element.getBoundingClientRect();
+  return (
+    position.x >= rect.left &&
+    position.x <= rect.right &&
+    position.y >= rect.top &&
+    position.y <= rect.bottom
+  );
+};
 
 const toTaskActivity = (
   taskStatus: MediaController["state"]["tasksById"][string]["status"] | undefined,
@@ -76,11 +98,7 @@ const toTaskActivity = (
   const isTaskRunning = taskStatus === "running";
 
   return {
-    buttonLabel: isTaskStarting
-      ? "Starting..."
-      : isTaskRunning
-        ? "Running Detection..."
-        : "Run Detection",
+    buttonLabel: isTaskStarting ? "Starting..." : isTaskRunning ? "Detecting..." : "Detect",
     isBusy: isTaskStarting || isTaskRunning,
   };
 };
@@ -115,28 +133,26 @@ const toCompletionMessage = (
   cancelRequested: boolean,
 ) => {
   if (cancelRequested && taskStatus !== "cancelled" && taskStatus !== "completed") {
-    return "Cancellation requested. The worker will stop after the current file finishes.";
+    return "Stopping after current file.";
   }
 
   if (cancelRequested && taskStatus === "completed") {
-    return "Cancellation was requested, but the current file was already in progress. It finished because cancel mode is stop-after-current.";
+    return "Cancelled, but current file finished.";
   }
 
   if (taskStatus === "completed" && totalFlagged === 0) {
-    return "Detection completed. No concerning lines were found in the latest run.";
+    return "Detection completed. No flags found.";
   }
 
   if (taskStatus === "completed") {
-    return `Detection completed. Found ${totalFlagged} concerning subtitle line${
-      totalFlagged === 1 ? "" : "s"
-    }.`;
+    return `Found ${totalFlagged} flag${totalFlagged === 1 ? "" : "s"}.`;
   }
 
   if (taskStatus === "cancelled") {
-    return "Detection stopped after the current file. Completed results remain available below.";
+    return "Detection stopped.";
   }
 
-  return "Run local detection to generate analysis sidecars and review flagged lines.";
+  return "Analyze subtitles to detect inappropriate content.";
 };
 
 const loadAnalysisSidecars = async (
@@ -204,39 +220,39 @@ type DetectionTaskDrawerContentProps = {
 const DetectionTaskDrawerContent = ({ flagTask }: DetectionTaskDrawerContentProps) => {
   if (!flagTask) {
     return (
-      <p className="rounded-[22px] border border-[#e7d2c5] border-dashed bg-[#fff8f3] px-4 py-5 text-[#8f5e56] text-sm">
+      <p className="rounded-[12px] border border-[#e7d2c5] border-dashed bg-[#fff8f3] px-2.5 py-2.5 text-[#8f5e56] text-xs">
         No detection task has run yet.
       </p>
     );
   }
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between rounded-[20px] border border-[#ead3c4] bg-[#fffaf6] px-4 py-3">
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between rounded-[12px] border border-[#ead3c4] bg-[#fffaf6] px-2 py-1.5">
         <div>
-          <p className="text-[#8f5e56] text-sm">Task Status</p>
-          <p className="mt-1 font-medium text-[#5b2722] text-sm">{flagTask.taskId}</p>
+          <p className="text-[#8f5e56] text-xs">Task Status</p>
+          <p className="mt-0.5 font-medium text-[#5b2722] text-xs">{flagTask.taskId}</p>
         </div>
         <Badge variant={toTaskStatusVariant(flagTask.status)}>{flagTask.status}</Badge>
       </div>
       {flagTask.cancelRequested ? (
-        <div className="rounded-[18px] border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900 text-sm">
+        <div className="rounded-[10px] border border-amber-200 bg-amber-50 px-2 py-1.5 text-amber-900 text-xs">
           Cancellation was requested. The worker will stop after the current file finishes.
         </div>
       ) : null}
       {flagTask.jobs.map((job) => (
-        <div key={job.jobId} className="rounded-[22px] border border-[#ead3c4] bg-[#fffaf7] p-4">
-          <div className="flex items-center justify-between gap-3">
-            <p className="truncate font-medium text-[#5f2823] text-sm">{job.fileName}</p>
+        <div key={job.jobId} className="rounded-[12px] border border-[#ead3c4] bg-[#fffaf7] p-1.5">
+          <div className="flex items-center justify-between gap-2">
+            <p className="truncate font-medium text-[#5f2823] text-xs">{job.fileName}</p>
             <Badge variant={job.status === "completed" ? "completed" : job.status}>
               {job.status}
             </Badge>
           </div>
           {job.outputPath ? (
-            <p className="mt-2 text-[#8f5e56] text-xs">{toFileName(job.outputPath)}</p>
+            <p className="mt-1 text-[#8f5e56] text-xs">{toFileName(job.outputPath)}</p>
           ) : null}
           <LogOutput logs={job.logs} />
-          {job.error ? <p className="mt-3 text-rose-700 text-xs">{job.error}</p> : null}
+          {job.error ? <p className="mt-1 text-rose-700 text-xs">{job.error}</p> : null}
         </div>
       ))}
     </div>
@@ -248,19 +264,19 @@ type SelectedFilesCardProps = {
 };
 
 const SelectedFilesCard = ({ selectedSrtPaths }: SelectedFilesCardProps) => (
-  <div className="rounded-[22px] border border-[#ead3c4] bg-[#fffaf6] px-4 py-4">
-    <div className="flex items-center justify-between gap-3">
-      <p className="text-[#8f5e56] text-sm">Selected subtitle files</p>
-      <span className="font-medium text-[#5b2722] text-sm">{selectedSrtPaths.length}</span>
+  <div className="rounded-[14px] border border-[#ead3c4] bg-[#fffaf6] px-2.5 py-2">
+    <div className="flex items-center justify-between gap-2">
+      <p className="text-[#8f5e56] text-xs">Selected subtitle files</p>
+      <span className="font-medium text-[#5b2722] text-xs">{selectedSrtPaths.length}</span>
     </div>
-    <div className="mt-3 max-h-56 space-y-2 overflow-auto pr-1">
+    <div className="mt-1.5 max-h-40 space-y-1 overflow-auto pr-1">
       {selectedSrtPaths.length === 0 ? (
-        <p className="text-[#8f5e56] text-sm">No files selected.</p>
+        <p className="text-[#8f5e56] text-xs">No files selected.</p>
       ) : (
         selectedSrtPaths.map((path) => (
           <div
             key={path}
-            className="rounded-[18px] border border-[#ead3c4] bg-white px-3 py-2 text-[#5f2823] text-sm"
+            className="rounded-[12px] border border-[#ead3c4] bg-white px-2 py-1 text-[#5f2823] text-xs"
           >
             {toFileName(path)}
           </div>
@@ -287,18 +303,18 @@ const DetectionFeedbackCard = ({
   workerMessage,
   workerStatus,
 }: DetectionFeedbackCardProps) => (
-  <div className="rounded-[22px] border border-[#ead3c4] bg-[#fffaf6] px-4 py-4">
-    <div className="flex items-center justify-between gap-3">
-      <p className="text-[#8f5e56] text-sm">Detection Feedback</p>
+  <div className="rounded-[14px] border border-[#ead3c4] bg-[#fffaf6] px-2.5 py-2">
+    <div className="flex items-center justify-between gap-2">
+      <p className="text-[#8f5e56] text-xs">Detection Feedback</p>
       <Badge variant={toWorkerStatusVariant(workerStatus)}>{workerStatus}</Badge>
     </div>
-    <p className="mt-2 text-[#7f524a] text-sm">{workerMessage}</p>
-    <p className="mt-2 font-medium text-[#5b2722] text-sm">
+    <p className="mt-1 text-[#7f524a] text-xs">{workerMessage}</p>
+    <p className="mt-1 font-medium text-[#5b2722] text-xs">
       {toCompletionMessage(taskStatus, totalFlagged, cancelRequested)}
     </p>
     {latestLogLine ? (
-      <div className="mt-3 rounded-[16px] bg-[#fdf1e8] px-3 py-2">
-        <p className="font-mono text-[#7f524a] text-[11px]">{latestLogLine}</p>
+      <div className="mt-1.5 rounded-[12px] bg-[#fdf1e8] px-2 py-1">
+        <p className="font-mono text-[#7f524a] text-[9px]">{latestLogLine}</p>
       </div>
     ) : null}
   </div>
@@ -319,23 +335,23 @@ const EngineCard = ({
   onEngineChange,
   settingsError,
 }: EngineCardProps) => (
-  <div className="rounded-[22px] border border-[#ead3c4] bg-[#fffaf6] px-4 py-4">
-    <div className="flex items-center justify-between gap-3">
+  <div className="rounded-[14px] border border-[#ead3c4] bg-[#fffaf6] px-2.5 py-2">
+    <div className="flex items-center justify-between gap-2">
       <div>
-        <p className="text-[#8f5e56] text-sm">Analysis Mode</p>
-        <p className="mt-1 font-medium text-[#5b2722] text-sm">
+        <p className="text-[#8f5e56] text-xs">Analysis Mode</p>
+        <p className="mt-0.5 font-medium text-[#5b2722] text-xs">
           {moderationEngineLabel(engine)} · {analysisStrategy}
         </p>
       </div>
-      <Brain className="size-4 text-[#8f5e56]" />
+      <Brain className="size-3.5 text-[#8f5e56]" />
     </div>
-    <div className="mt-3 grid gap-3">
-      <label className="space-y-2">
+    <div className="mt-1.5 grid gap-1.5">
+      <label className="space-y-1">
         <span className="text-[#8f5e56] text-xs">Detection engine</span>
         <select
           value={engine}
           onChange={(event) => onEngineChange(event.currentTarget.value as ModerationEngine)}
-          className="h-11 w-full rounded-[18px] border border-[#d9b7a5] bg-white px-4 text-[#4f1f1a] text-sm outline-none transition focus:border-[#88322d] focus:ring-[#c57267]/25 focus:ring-[3px]"
+          className="h-9 w-full rounded-[14px] border border-[#d9b7a5] bg-white px-3 text-[#4f1f1a] text-xs outline-none transition focus:border-[#88322d] focus:ring-[#c57267]/25 focus:ring-[2px]"
         >
           {moderationEngineOptions.map((option) => (
             <option key={option.value} value={option.value} disabled={option.disabled}>
@@ -344,12 +360,12 @@ const EngineCard = ({
           ))}
         </select>
       </label>
-      <label className="space-y-2">
+      <label className="space-y-1">
         <span className="text-[#8f5e56] text-xs">Reasoning depth</span>
         <select
           value={analysisStrategy}
           onChange={(event) => onStrategyChange(event.currentTarget.value as AnalysisStrategy)}
-          className="h-11 w-full rounded-[18px] border border-[#d9b7a5] bg-white px-4 text-[#4f1f1a] text-sm outline-none transition focus:border-[#88322d] focus:ring-[#c57267]/25 focus:ring-[3px]"
+          className="h-9 w-full rounded-[14px] border border-[#d9b7a5] bg-white px-3 text-[#4f1f1a] text-xs outline-none transition focus:border-[#88322d] focus:ring-[#c57267]/25 focus:ring-[2px]"
         >
           <option value="fast">Fast</option>
           <option value="deep">Deep</option>
@@ -359,8 +375,7 @@ const EngineCard = ({
         {moderationEngineOptions.find((option) => option.value === engine)?.description}
       </p>
       <p className="text-[#8f5e56] text-xs">
-        Fast uses the lighter model path. Deep uses the stronger model path for harder contextual
-        review.
+        Fast: lighter model. Deep: stronger contextual review.
       </p>
       {settingsError ? <p className="text-rose-700 text-xs">{settingsError}</p> : null}
     </div>
@@ -382,18 +397,18 @@ const OverviewCards = ({
   mediumCount,
   totalFlagged,
 }: OverviewCardsProps) => (
-  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
-    <div className="rounded-[22px] border border-[#ead3c4] bg-[#fffaf6] px-4 py-4">
-      <p className="text-[#8f5e56] text-sm">Flagged Lines</p>
-      <p className="mt-2 font-semibold text-2xl text-[#5b2722]">{totalFlagged}</p>
+  <div className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-1">
+    <div className="rounded-[14px] border border-[#ead3c4] bg-[#fffaf6] px-2.5 py-2">
+      <p className="text-[#8f5e56] text-xs">Flagged Lines</p>
+      <p className="mt-1 font-semibold text-[#5b2722] text-xl">{totalFlagged}</p>
     </div>
-    <div className="rounded-[22px] border border-[#ead3c4] bg-[#fffaf6] px-4 py-4">
-      <p className="text-[#8f5e56] text-sm">Files With Flags</p>
-      <p className="mt-2 font-semibold text-2xl text-[#5b2722]">{filesWithFlags}</p>
+    <div className="rounded-[14px] border border-[#ead3c4] bg-[#fffaf6] px-2.5 py-2">
+      <p className="text-[#8f5e56] text-xs">Files With Flags</p>
+      <p className="mt-1 font-semibold text-[#5b2722] text-xl">{filesWithFlags}</p>
     </div>
-    <div className="rounded-[22px] border border-[#ead3c4] bg-[#fffaf6] px-4 py-4">
-      <p className="text-[#8f5e56] text-sm">Priority Mix</p>
-      <div className="mt-2 flex flex-wrap gap-2">
+    <div className="rounded-[14px] border border-[#ead3c4] bg-[#fffaf6] px-2.5 py-2">
+      <p className="text-[#8f5e56] text-xs">Priority Mix</p>
+      <div className="mt-1 flex flex-wrap gap-1">
         <Badge variant="failed">high {highCount}</Badge>
         <Badge variant="running">medium {mediumCount}</Badge>
         <Badge variant="queued">low {lowCount}</Badge>
@@ -402,14 +417,55 @@ const OverviewCards = ({
   </div>
 );
 
+const formatSegmentTimeLabel = (segment: ModerationJobResult["segments"][number]) => {
+  if (typeof segment.endTime === "number" && Number.isFinite(segment.endTime)) {
+    return `${formatTime(segment.startTime, segment.endTime)} - ${formatTime(
+      segment.endTime,
+      segment.endTime,
+    )}`;
+  }
+
+  return formatTime(segment.startTime);
+};
+
+type ResultSegmentRowProps = {
+  jobId: string;
+  segment: ModerationJobResult["segments"][number];
+};
+
+const ResultSegmentRow = ({ jobId, segment }: ResultSegmentRowProps) => (
+  <div
+    className="rounded-[12px] border border-[#ead3c4] bg-white px-2 py-1.5"
+    key={`${jobId}-${segment.startTime}-${segment.ruleId}`}
+  >
+    <div className="flex flex-wrap items-center gap-1.5">
+      <Badge
+        variant={
+          segment.priority === "high"
+            ? "failed"
+            : segment.priority === "medium"
+              ? "running"
+              : "queued"
+        }
+      >
+        {segment.priority}
+      </Badge>
+      <span className="font-mono text-[#7f524a] text-xs">{formatSegmentTimeLabel(segment)}</span>
+      <span className="text-[#8f5e56] text-xs">{segment.category}</span>
+    </div>
+    <p className="mt-1 font-medium text-[#5b2722] text-xs">{segment.reason}</p>
+    <p className="mt-0.5 text-[#7f524a] text-xs">{segment.text}</p>
+  </div>
+);
+
 type ResultsSectionProps = {
   moderationResults: ModerationJobResult[];
 };
 
 const ResultsSection = ({ moderationResults }: ResultsSectionProps) => (
-  <div className="space-y-3">
-    <div className="flex items-center justify-between gap-3">
-      <p className="font-medium text-[#5b2722] text-sm">Latest Results</p>
+  <div className="space-y-2">
+    <div className="flex items-center justify-between gap-2">
+      <p className="font-medium text-[#5b2722] text-xs">Latest Results</p>
       <span className="text-[#8f5e56] text-xs">
         {moderationResults.length === 0
           ? "No completed analysis yet."
@@ -417,7 +473,7 @@ const ResultsSection = ({ moderationResults }: ResultsSectionProps) => (
       </span>
     </div>
     {moderationResults.length === 0 ? (
-      <div className="rounded-[22px] border border-[#e7d2c5] border-dashed bg-[#fff8f3] px-4 py-5 text-[#8f5e56] text-sm">
+      <div className="rounded-[14px] border border-[#e7d2c5] border-dashed bg-[#fff8f3] px-3 py-3 text-[#8f5e56] text-xs">
         Run detection or load existing `.analysis.json` sidecars to review flagged subtitle lines
         here.
       </div>
@@ -425,14 +481,14 @@ const ResultsSection = ({ moderationResults }: ResultsSectionProps) => (
       moderationResults.map((result) => (
         <div
           key={result.jobId}
-          className="rounded-[24px] border border-[#ead3c4] bg-[#fffaf7] px-4 py-4"
+          className="rounded-[16px] border border-[#ead3c4] bg-[#fffaf7] px-3 py-2"
         >
-          <div className="flex items-start justify-between gap-3">
+          <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
-              <p className="truncate font-medium text-[#5f2823] text-sm">{result.fileName}</p>
-              <p className="mt-1 text-[#8f5e56] text-xs">{result.summary}</p>
+              <p className="truncate font-medium text-[#5f2823] text-xs">{result.fileName}</p>
+              <p className="mt-0.5 text-[#8f5e56] text-xs">{result.summary}</p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1">
               <Badge variant={result.status === "completed" ? "completed" : result.status}>
                 {result.status}
               </Badge>
@@ -442,39 +498,19 @@ const ResultsSection = ({ moderationResults }: ResultsSectionProps) => (
             </div>
           </div>
           {result.segments.length === 0 ? (
-            <p className="mt-3 text-[#7f524a] text-sm">
+            <p className="mt-2 text-[#7f524a] text-xs">
               {result.status === "completed"
                 ? "No concerning lines were detected for this file."
                 : "Detailed analysis output will appear here after completion."}
             </p>
           ) : (
-            <div className="mt-3 space-y-2">
+            <div className="mt-2 space-y-1.5">
               {result.segments.map((segment) => (
-                <div
+                <ResultSegmentRow
                   key={`${result.jobId}-${segment.startTime}-${segment.ruleId}`}
-                  className="rounded-[18px] border border-[#ead3c4] bg-white px-3 py-3"
-                >
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Badge
-                      variant={
-                        segment.priority === "high"
-                          ? "failed"
-                          : segment.priority === "medium"
-                            ? "running"
-                            : "queued"
-                      }
-                    >
-                      {segment.priority}
-                    </Badge>
-                    <span className="font-mono text-[#7f524a] text-xs">
-                      {formatTime(segment.startTime, segment.endTime)} -{" "}
-                      {formatTime(segment.endTime, segment.endTime)}
-                    </span>
-                    <span className="text-[#8f5e56] text-xs">{segment.category}</span>
-                  </div>
-                  <p className="mt-2 font-medium text-[#5b2722] text-sm">{segment.reason}</p>
-                  <p className="mt-1 text-[#7f524a] text-sm">{segment.text}</p>
-                </div>
+                  jobId={result.jobId}
+                  segment={segment}
+                />
               ))}
             </div>
           )}
@@ -484,9 +520,10 @@ const ResultsSection = ({ moderationResults }: ResultsSectionProps) => (
   </div>
 );
 
-const ProfanityPanel = ({ controller }: ProfanityPanelProps) => {
+const ProfanityPanel = ({ controller, isActive }: ProfanityPanelProps) => {
   const [selectedSrtPaths, setSelectedSrtPaths] = useState<string[]>([]);
   const [isResolvingFolder, setIsResolvingFolder] = useState(false);
+  const [isDropTargetActive, setIsDropTargetActive] = useState(false);
   const [isLoadingExistingResults, setIsLoadingExistingResults] = useState(false);
   const [analysisByJobId, setAnalysisByJobId] = useState<Record<string, AnalysisSidecar>>({});
   const [manualResults, setManualResults] = useState<Record<string, ManualAnalysisResult>>({});
@@ -496,11 +533,71 @@ const ProfanityPanel = ({ controller }: ProfanityPanelProps) => {
   const previousTaskIdRef = useRef<string | null>(null);
   const loadedJobIdsRef = useRef<Set<string>>(new Set());
   const loadSettingsRef = useRef(controller.loadSettings);
+  const dropTargetRef = useRef<HTMLDivElement>(null);
   loadSettingsRef.current = controller.loadSettings;
 
   const flagTask = getLatestTask(controller.state.tasksById, "flag");
   const taskActivity = toTaskActivity(flagTask?.status, controller.state.workerStatus);
   const latestLogLine = getLatestTaskLogLine(flagTask);
+
+  useEffect(() => {
+    if (!isActive) {
+      setIsDropTargetActive(false);
+      return;
+    }
+
+    let mounted = true;
+
+    const handleDragDropEvent = async (event: { payload: DragDropEvent }) => {
+      if (!mounted) {
+        return;
+      }
+
+      if (event.payload.type === "leave") {
+        setIsDropTargetActive(false);
+        return;
+      }
+
+      if (event.payload.type === "over" || event.payload.type === "enter") {
+        setIsDropTargetActive(isWithinDropTarget(dropTargetRef, event.payload.position));
+        return;
+      }
+
+      const droppedInsideTarget = isWithinDropTarget(dropTargetRef, event.payload.position);
+      setIsDropTargetActive(false);
+      if (!droppedInsideTarget) {
+        return;
+      }
+
+      const droppedPaths = event.payload.paths.filter((path) => isSupportedSrtPath(path));
+      if (droppedPaths.length === 0) {
+        return;
+      }
+
+      setSelectedSrtPaths((previous) => dedupePaths([...previous, ...droppedPaths]));
+    };
+
+    let cleanup: (() => void) | undefined;
+    const setup = async () => {
+      const unlisten = await getCurrentWindow().onDragDropEvent((event) => {
+        void handleDragDropEvent(event);
+      });
+      return unlisten;
+    };
+
+    setup()
+      .then((unlisten) => {
+        cleanup = unlisten;
+      })
+      .catch(() => {
+        setIsDropTargetActive(false);
+      });
+
+    return () => {
+      mounted = false;
+      cleanup?.();
+    };
+  }, [isActive]);
 
   useEffect(() => {
     let mounted = true;
@@ -677,23 +774,23 @@ const ProfanityPanel = ({ controller }: ProfanityPanelProps) => {
 
   return (
     <Card>
-      <CardHeader className="grid grid-cols-[1fr_auto] gap-4">
+      <CardHeader className="grid grid-cols-[1fr_auto] gap-2">
         <div>
-          <CardTitle className="flex items-center gap-3">
-            <span className="flex size-10 items-center justify-center rounded-2xl bg-[#f5e6dc] text-[#88322d]">
-              <ShieldAlert className="size-4" />
+          <CardTitle className="flex items-center gap-2">
+            <span className="flex size-7 items-center justify-center rounded-lg bg-[#f5e6dc] text-[#88322d]">
+              <ShieldAlert className="size-3" />
             </span>
             Profanity Detection
           </CardTitle>
-          <p className="mt-2 text-[#8f5e56] text-sm">
-            Analyze `.srt` files, save `.analysis.json`, and review flagged lines with timestamps.
+          <p className="mt-0.5 text-[#8f5e56] text-xs">
+            Analyze subtitles for inappropriate content.
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-1.5">
           <TaskDrawer
             triggerLabel="Moderation Rules"
             title="Moderation Rules"
-            description="Edit the blacklist, aqeedah rules, and guidance used by the detector."
+            description="Edit detection rules and blacklist."
           >
             <ModerationSettingsPanel
               onLoad={controller.loadSettings}
@@ -705,108 +802,124 @@ const ProfanityPanel = ({ controller }: ProfanityPanelProps) => {
           <TaskDrawer
             triggerLabel="Open Task"
             title="Latest Detection Task"
-            description="Latest moderation run with file-level status and full worker logs."
+            description="Status and logs for the latest run."
           >
             <DetectionTaskDrawerContent flagTask={flagTask} />
           </TaskDrawer>
         </div>
       </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
-          <div className="space-y-4">
-            <div className="flex flex-wrap gap-3">
-              <Button type="button" variant="secondary" onClick={addSrtFiles}>
-                <Plus className="size-4" />
-                Add SRT Files
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={addFolder}
-                disabled={isResolvingFolder}
-              >
-                {isResolvingFolder ? (
-                  <LoaderCircle className="size-4 animate-spin" />
-                ) : (
-                  <FolderOpen className="size-4" />
-                )}
-                Add Folder
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={loadExistingResults}
-                disabled={selectedSrtPaths.length === 0 || isLoadingExistingResults}
-              >
-                {isLoadingExistingResults ? (
-                  <LoaderCircle className="size-4 animate-spin" />
-                ) : (
-                  <Settings2 className="size-4" />
-                )}
-                Load Existing Results
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={() => {
-                  setManualResults({});
-                  setSelectedSrtPaths([]);
-                }}
-                disabled={selectedSrtPaths.length === 0 && Object.keys(manualResults).length === 0}
-              >
-                <Trash2 className="size-4" />
-                Clear
-              </Button>
-              <Button
-                type="button"
-                onClick={startFlagging}
-                disabled={selectedSrtPaths.length === 0 || taskActivity.isBusy}
-              >
-                {taskActivity.isBusy ? (
-                  <LoaderCircle className="size-4 animate-spin" />
-                ) : (
-                  <Sparkles className="size-4" />
-                )}
-                {taskActivity.buttonLabel}
-              </Button>
-              <Button
-                type="button"
-                variant="danger"
-                onClick={() => controller.cancelTaskById(flagTask?.taskId ?? null)}
-                disabled={
-                  !flagTask || flagTask.cancelRequested === true || taskActivity.isBusy === false
-                }
-              >
-                Cancel Task
-              </Button>
+      <CardContent className="space-y-2">
+        <div
+          ref={dropTargetRef}
+          className={`rounded-[16px] transition ${
+            isDropTargetActive
+              ? "bg-[#fff1e8] shadow-[0_0_0_2px_rgba(197,114,103,0.15)]"
+              : "bg-transparent"
+          }`}
+        >
+          <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_280px]">
+            <div className="space-y-2">
+              <div className="flex flex-wrap gap-1.5">
+                <Button type="button" size="sm" variant="secondary" onClick={addSrtFiles}>
+                  <Plus className="size-3" />
+                  Add SRT Files
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  onClick={addFolder}
+                  disabled={isResolvingFolder}
+                >
+                  {isResolvingFolder ? (
+                    <LoaderCircle className="size-3 animate-spin" />
+                  ) : (
+                    <FolderOpen className="size-3" />
+                  )}
+                  Add Folder
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  onClick={loadExistingResults}
+                  disabled={selectedSrtPaths.length === 0 || isLoadingExistingResults}
+                >
+                  {isLoadingExistingResults ? (
+                    <LoaderCircle className="size-3 animate-spin" />
+                  ) : (
+                    <Settings2 className="size-3" />
+                  )}
+                  Load Results
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    setManualResults({});
+                    setSelectedSrtPaths([]);
+                  }}
+                  disabled={
+                    selectedSrtPaths.length === 0 && Object.keys(manualResults).length === 0
+                  }
+                >
+                  <Trash2 className="size-3" />
+                  Clear
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={startFlagging}
+                  disabled={selectedSrtPaths.length === 0 || taskActivity.isBusy}
+                >
+                  {taskActivity.isBusy ? (
+                    <LoaderCircle className="size-3 animate-spin" />
+                  ) : (
+                    <Sparkles className="size-3" />
+                  )}
+                  {taskActivity.buttonLabel}
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="danger"
+                  onClick={() => controller.cancelTaskById(flagTask?.taskId ?? null)}
+                  disabled={
+                    !flagTask || flagTask.cancelRequested === true || taskActivity.isBusy === false
+                  }
+                >
+                  Cancel Task
+                </Button>
+              </div>
+
+              <SelectedFilesCard selectedSrtPaths={selectedSrtPaths} />
+              <DetectionFeedbackCard
+                cancelRequested={flagTask?.cancelRequested ?? false}
+                latestLogLine={latestLogLine}
+                taskStatus={flagTask?.status}
+                totalFlagged={moderationOverview.totalFlagged}
+                workerMessage={controller.state.workerMessage}
+                workerStatus={controller.state.workerStatus}
+              />
             </div>
 
-            <SelectedFilesCard selectedSrtPaths={selectedSrtPaths} />
-            <DetectionFeedbackCard
-              cancelRequested={flagTask?.cancelRequested ?? false}
-              latestLogLine={latestLogLine}
-              taskStatus={flagTask?.status}
-              totalFlagged={moderationOverview.totalFlagged}
-              workerMessage={controller.state.workerMessage}
-              workerStatus={controller.state.workerStatus}
-            />
-          </div>
-
-          <div className="space-y-4">
-            <EngineCard
-              analysisStrategy={analysisStrategy}
-              engine={engine}
-              onEngineChange={setEngine}
-              onStrategyChange={setAnalysisStrategy}
-              settingsError={settingsError}
-            />
-            <OverviewCards
-              filesWithFlags={moderationOverview.filesWithFlags}
-              highCount={moderationOverview.counts.high}
-              lowCount={moderationOverview.counts.low}
-              mediumCount={moderationOverview.counts.medium}
-              totalFlagged={moderationOverview.totalFlagged}
-            />
+            <div className="space-y-2">
+              <EngineCard
+                analysisStrategy={analysisStrategy}
+                engine={engine}
+                onEngineChange={setEngine}
+                onStrategyChange={setAnalysisStrategy}
+                settingsError={settingsError}
+              />
+              <OverviewCards
+                filesWithFlags={moderationOverview.filesWithFlags}
+                highCount={moderationOverview.counts.high}
+                lowCount={moderationOverview.counts.low}
+                mediumCount={moderationOverview.counts.medium}
+                totalFlagged={moderationOverview.totalFlagged}
+              />
+            </div>
           </div>
         </div>
 

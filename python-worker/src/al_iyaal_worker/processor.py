@@ -93,9 +93,6 @@ def process_batch(
     should_cancel: ShouldCancel,
     command_runner: RunCommand = run_command,
 ) -> None:
-    output_dir = Path(command.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
     ffmpeg_path = os.getenv("AIYAAL_FFMPEG_PATH", "ffmpeg")
     demucs_path = os.getenv("AIYAAL_DEMUCS_PATH", "demucs")
     device = resolve_compute_device(command.compute_mode)
@@ -175,6 +172,8 @@ def process_batch(
             }
         )
 
+        output_dir = input_path.parent / "audio_replaced"
+        output_dir.mkdir(parents=True, exist_ok=True)
         output_path = output_dir / input_path.name
         emit(
             {

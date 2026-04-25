@@ -2,14 +2,13 @@ use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
+    sync::Mutex,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
-use tokio::sync::Mutex;
-
 use crate::types::{
     AnalyticsSnapshot, AnalyticsTaskKind, AnalyticsTaskKindBreakdown, AnalyticsTotals,
     AnalyticsWorkRecord, BatchState, TaskKind, TaskState,
@@ -21,7 +20,7 @@ struct AnalyticsStore {
     records: Vec<AnalyticsWorkRecord>,
 }
 
-static ANALYTICS_STORE_LOCK: Mutex<()> = Mutex::const_new(());
+static ANALYTICS_STORE_LOCK: Mutex<()> = Mutex::new(());
 
 fn analytics_store_path_from_dir(base_dir: &Path) -> PathBuf {
     base_dir.join("analytics/history.json")
@@ -133,7 +132,9 @@ fn duration_minutes(started_at_epoch_seconds: Option<u64>) -> u64 {
 }
 
 fn append_record(path: &Path, record: AnalyticsWorkRecord) -> Result<(), String> {
-    let _guard = ANALYTICS_STORE_LOCK.blocking_lock();
+    let _guard = ANALYTICS_STORE_LOCK
+        .lock()
+        .map_err(|_| "Failed to acquire analytics store lock".to_string())?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| {
             format!(
@@ -410,6 +411,20 @@ mod tests {
 
         let store = read_store(&path).unwrap();
         assert_eq!(store.records.len(), 8);
+    }
+
+    #[test]
+    fn should_append_records_from_within_a_tokio_runtime_thread() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let base_dir = temp_path();
+        let path = analytics_store_path_from_dir(&base_dir);
+
+        runtime.block_on(async {
+            append_record(&path, create_batch_record(&seed_batch(), Some(1))).unwrap();
+        });
+
+        let store = read_store(&path).unwrap();
+        assert_eq!(store.records.len(), 1);
     }
 
     #[test]

@@ -56,10 +56,13 @@ export type CutRange = {
   end: string;
 };
 
+export type CompressionPreset = "max_compression" | "balanced";
+
 export type StartCutJobRequest = {
   videoPath: string;
   ranges: CutRange[];
   outputMode: "video_cleaned_default";
+  compressionPreset: CompressionPreset;
 };
 
 export type CutJobStartedResponse = {
@@ -95,7 +98,7 @@ export type SrtListItem = {
 
 export type FlaggedSegment = {
   startTime: number;
-  endTime: number;
+  endTime?: number;
   text: string;
   reason: string;
   priority: "high" | "medium" | "low";

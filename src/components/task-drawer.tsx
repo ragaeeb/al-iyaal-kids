@@ -25,13 +25,13 @@ const TaskDrawer = ({ children, description, title, triggerLabel }: TaskDrawerPr
   return (
     <>
       <Button type="button" variant="secondary" size="sm" onClick={() => setOpen(true)}>
-        <PanelRightOpen className="size-4" />
+        <PanelRightOpen className="size-3" />
         {triggerLabel}
       </Button>
       <Drawer open={open} onOpenChange={setOpen}>
         <DrawerPopup>
           <div className="flex min-h-0 flex-1 flex-col">
-            <div className="flex items-start justify-between gap-4">
+            <div className="flex items-start justify-between gap-1.5">
               <DrawerHeader>
                 <DrawerTitle>{title}</DrawerTitle>
                 <DrawerDescription>{description}</DrawerDescription>

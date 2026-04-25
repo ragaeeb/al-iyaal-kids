@@ -33,6 +33,45 @@ const emptyPriorityCounts = (): ModerationPriorityCounts => ({
   medium: 0,
 });
 
+const toFiniteNumber = (value: unknown) => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  return null;
+};
+
+const normalizeFlaggedSegment = (candidate: Partial<FlaggedSegment>): FlaggedSegment | null => {
+  const startTime = toFiniteNumber(candidate.startTime);
+
+  if (startTime === null) {
+    return null;
+  }
+
+  if (
+    candidate.priority !== "high" &&
+    candidate.priority !== "medium" &&
+    candidate.priority !== "low"
+  ) {
+    return null;
+  }
+
+  return {
+    category: typeof candidate.category === "string" ? candidate.category : "",
+    endTime: toFiniteNumber(candidate.endTime) ?? undefined,
+    priority: candidate.priority,
+    reason: typeof candidate.reason === "string" ? candidate.reason : "",
+    ruleId: typeof candidate.ruleId === "string" ? candidate.ruleId : "",
+    startTime,
+    text: typeof candidate.text === "string" ? candidate.text : "",
+  };
+};
+
 const toFlaggedCount = (job: TaskJobRecord, sidecar?: AnalysisSidecar) =>
   sidecar?.flagged.length ?? job.artifacts?.flaggedCount ?? 0;
 
@@ -84,6 +123,10 @@ const parseAnalysisSidecar = (content: string): AnalysisSidecar => {
     throw new Error("Invalid analysis sidecar shape");
   }
 
+  const flagged = candidate.flagged
+    .map((entry) => normalizeFlaggedSegment(entry as Partial<FlaggedSegment>))
+    .filter((entry): entry is FlaggedSegment => entry !== null);
+
   return {
     createdAt: typeof candidate.createdAt === "string" ? candidate.createdAt : "",
     engine:
@@ -92,7 +135,7 @@ const parseAnalysisSidecar = (content: string): AnalysisSidecar => {
       candidate.engine === "blacklist"
         ? candidate.engine
         : "blacklist",
-    flagged: candidate.flagged,
+    flagged,
     summary: candidate.summary,
     videoFileName: typeof candidate.videoFileName === "string" ? candidate.videoFileName : "",
   };
@@ -110,5 +153,5 @@ const toJobArtifacts = (value: unknown): TaskJobArtifacts | undefined => {
   };
 };
 
-export { buildModerationOverview, parseAnalysisSidecar, toJobArtifacts, toModerationJobResult };
 export type { ModerationJobResult, ModerationOverview, ModerationPriorityCounts };
+export { buildModerationOverview, parseAnalysisSidecar, toJobArtifacts, toModerationJobResult };

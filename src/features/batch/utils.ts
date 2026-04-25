@@ -14,9 +14,12 @@ export const isSupportedVideoPath = (path: string, allowedExtensions = SUPPORTED
   return allowedExtensions.some((extension) => normalized.endsWith(extension));
 };
 
-export const buildStartBatchRequest = (inputDir: string): StartBatchRequest => ({
+export const dedupePaths = (paths: string[]) =>
+  Array.from(new Set(paths.map(normalizePath).filter((path) => path.length > 0)));
+
+export const buildStartBatchRequest = (inputPaths: string[]): StartBatchRequest => ({
   allowedExtensions: SUPPORTED_EXTENSIONS,
-  inputDir: normalizePath(inputDir),
+  inputPaths: dedupePaths(inputPaths),
   outputDirMode: "audio_replaced_default",
 });
 

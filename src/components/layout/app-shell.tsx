@@ -21,10 +21,10 @@ const AppShell = ({
   onToggleSidebar,
 }: AppShellProps) => {
   return (
-    <main className="root min-h-screen bg-[linear-gradient(180deg,#f8efe8_0%,#f7f2ed_100%)] px-4 py-4 text-[var(--text-primary)]">
+    <main className="root h-screen overflow-hidden bg-[linear-gradient(180deg,#f8efe8_0%,#f7f2ed_100%)] text-[var(--text-primary)]">
       <div
-        className={`mx-auto grid min-h-[calc(100vh-2rem)] w-full max-w-[1680px] overflow-hidden rounded-[28px] border border-[#d9b7a5]/65 bg-[#fffdfb]/96 shadow-[0_28px_70px_rgba(136,50,45,0.12)] backdrop-blur ${
-          isSidebarCollapsed ? "grid-cols-[84px_minmax(0,1fr)]" : "grid-cols-[220px_minmax(0,1fr)]"
+        className={`grid h-full min-h-0 w-full overflow-hidden rounded-[18px] border border-[#d9b7a5]/65 bg-[#fffdfb]/96 shadow-[0_20px_50px_rgba(136,50,45,0.12)] backdrop-blur ${
+          isSidebarCollapsed ? "grid-cols-[56px_minmax(0,1fr)]" : "grid-cols-[160px_minmax(0,1fr)]"
         }`}
       >
         <SidebarNav
@@ -34,7 +34,7 @@ const AppShell = ({
           onNavigate={onNavigate}
           onToggleCollapse={onToggleSidebar}
         />
-        <section className="min-h-0 overflow-auto bg-[linear-gradient(180deg,rgba(255,250,246,0.96),rgba(255,247,240,0.92))] px-5 py-5">
+        <section className="min-h-0 overflow-auto bg-[linear-gradient(180deg,rgba(255,250,246,0.96),rgba(255,247,240,0.92))] px-3 py-2">
           {children}
         </section>
       </div>

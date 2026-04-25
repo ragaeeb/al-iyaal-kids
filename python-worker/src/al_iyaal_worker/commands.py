@@ -66,12 +66,37 @@ def build_transcribe_command(
     ]
 
 
+_COMPRESSION_PRESETS: dict[str, list[str]] = {
+    "max_compression": [
+        "-c:v", "libx265",
+        "-crf", "28",
+        "-preset", "slow",
+        "-tag:v", "hvc1",
+        "-c:a", "aac",
+        "-b:a", "64k",
+        "-ac", "1",
+    ],
+    "balanced": [
+        "-c:v", "libx264",
+        "-crf", "20",
+        "-preset", "veryslow",
+        "-c:a", "aac",
+        "-b:a", "160k",
+    ],
+}
+
+
+def _compression_args(compression_preset: str) -> list[str]:
+    return _COMPRESSION_PRESETS.get(compression_preset, _COMPRESSION_PRESETS["max_compression"])
+
+
 def build_ffmpeg_slice_command(
     ffmpeg_path: str,
     video_path: Path,
     output_path: Path,
     start_seconds: float,
     duration_seconds: float,
+    compression_preset: str = "max_compression",
 ) -> list[str]:
     return [
         ffmpeg_path,
@@ -82,10 +107,7 @@ def build_ffmpeg_slice_command(
         str(video_path),
         "-t",
         str(duration_seconds),
-        "-c:v",
-        "libx264",
-        "-c:a",
-        "aac",
+        *_compression_args(compression_preset),
         str(output_path),
     ]
 

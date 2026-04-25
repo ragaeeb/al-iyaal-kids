@@ -32,5 +32,5 @@ const toVisibleLogLines = (
   }));
 };
 
-export { appendBoundedLogLine, DEFAULT_VISIBLE_LOG_LINES, MAX_STORED_LOG_LINES, toVisibleLogLines };
 export type { VisibleLogLine };
+export { appendBoundedLogLine, DEFAULT_VISIBLE_LOG_LINES, MAX_STORED_LOG_LINES, toVisibleLogLines };

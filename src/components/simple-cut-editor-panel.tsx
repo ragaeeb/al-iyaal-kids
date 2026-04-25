@@ -1,16 +1,34 @@
+import type { DragDropEvent } from "@tauri-apps/api/window";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Film, LoaderCircle, Plus, Scissors, Trash2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import {
+  Captions,
+  Film,
+  LoaderCircle,
+  Pause,
+  Play,
+  Scissors,
+  ShieldAlert,
+  Trash2,
+} from "lucide-react";
+import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
 
 import { TaskDrawer } from "@/components/task-drawer";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DrawerClose } from "@/components/ui/drawer";
+import { trashFile } from "@/features/batch/transport";
 import { findSubtitleAtTime, formatTime, parseSrt } from "@/features/editor/subtitles";
 import { getLatestTask, getTaskOutputPath } from "@/features/media/selectors";
 import { readTextFile } from "@/features/media/transport";
-import type { AnalysisSidecar, CutRange, SubtitleEntry, TaskState } from "@/features/media/types";
+import type {
+  AnalysisSidecar,
+  CompressionPreset,
+  CutRange,
+  SubtitleEntry,
+  TaskState,
+} from "@/features/media/types";
 import type { useMediaController } from "@/features/media/useMediaController";
 import { parseAnalysisSidecar } from "@/features/moderation/results";
 import { convertFileSrc } from "@/lib/tauri";
@@ -19,6 +37,7 @@ type MediaController = ReturnType<typeof useMediaController>;
 
 type SimpleCutEditorPanelProps = {
   controller: MediaController;
+  isActive: boolean;
 };
 
 type LocalRange = {
@@ -46,6 +65,26 @@ const normalizeDialogPath = (path: string) => {
   }
 };
 
+const isSupportedCutVideoPath = (path: string) => /\.(mp4|mov)$/i.test(path);
+
+const isWithinDropTarget = (
+  targetRef: RefObject<HTMLDivElement | null>,
+  position: { x: number; y: number },
+) => {
+  const element = targetRef.current;
+  if (!element) {
+    return false;
+  }
+
+  const rect = element.getBoundingClientRect();
+  return (
+    position.x >= rect.left &&
+    position.x <= rect.right &&
+    position.y >= rect.top &&
+    position.y <= rect.bottom
+  );
+};
+
 const toTimeToken = (value: number) => value.toFixed(3);
 
 const toCutRanges = (ranges: LocalRange[]): CutRange[] => {
@@ -57,6 +96,39 @@ const toCutRanges = (ranges: LocalRange[]): CutRange[] => {
 
 const toSrtSidecarPath = (path: string) => path.replace(/\.[^.]+$/, ".srt");
 const toAnalysisSidecarPath = (path: string) => path.replace(/\.[^.]+$/, ".analysis.json");
+
+const buildDeleteTargets = (
+  videoPath: string,
+  hasSubtitleSidecar: boolean,
+  hasAnalysisSidecar: boolean,
+) =>
+  [
+    videoPath,
+    hasSubtitleSidecar ? toSrtSidecarPath(videoPath) : null,
+    hasAnalysisSidecar ? toAnalysisSidecarPath(videoPath) : null,
+  ].filter((path): path is string => path !== null);
+
+type DeleteVideoFilesRequest = {
+  hasAnalysisSidecar: boolean;
+  hasSubtitleSidecar: boolean;
+  videoPath: string;
+};
+
+const deleteVideoFiles = async ({
+  hasAnalysisSidecar,
+  hasSubtitleSidecar,
+  videoPath,
+}: DeleteVideoFilesRequest): Promise<void> => {
+  const deleteTargets = buildDeleteTargets(videoPath, hasSubtitleSidecar, hasAnalysisSidecar);
+  const results = await Promise.allSettled(deleteTargets.map((path) => trashFile(path)));
+  const failedCount = results.filter((result) => result.status === "rejected").length;
+
+  if (failedCount > 0) {
+    throw new Error(
+      `Deleted ${deleteTargets.length - failedCount} of ${deleteTargets.length} files.`,
+    );
+  }
+};
 
 const resetLoadedSidecars = (
   setAnalysisSidecar: (value: AnalysisSidecar | null) => void,
@@ -100,103 +172,314 @@ const applyLoadedSidecars = (
   setAnalysisSidecar(null);
 };
 
-const toCurrentSliceLabel = (markerStart: number | null, markerEnd: number | null) => {
-  if (markerStart === null && markerEnd === null) {
-    return "Mark a start and end point to define the next slice.";
-  }
-
-  if (markerStart !== null && markerEnd === null) {
-    return `Current slice start: ${formatTime(markerStart)}. Mark the end point next.`;
-  }
-
-  if (markerStart === null && markerEnd !== null) {
-    return `Current slice end: ${formatTime(markerEnd)}. Mark the start point first.`;
-  }
-
-  if (markerStart !== null && markerEnd !== null && markerEnd > markerStart) {
-    return `Current slice: ${formatTime(markerStart)} - ${formatTime(markerEnd)}.`;
-  }
-
-  return "End must be after start to create a valid slice.";
+const clampSeekTime = (time: number, duration: number) => {
+  const upperBound =
+    Number.isFinite(duration) && duration > 0 ? duration : Number.POSITIVE_INFINITY;
+  return Math.max(0, Math.min(time, upperBound));
 };
 
-const CurrentSliceCard = ({
-  markerEnd,
-  markerStart,
-}: {
-  markerEnd: number | null;
-  markerStart: number | null;
-}) => (
-  <div className="rounded-[22px] border border-[#ead3c4] bg-[#fffaf6] px-3 py-3">
-    <p className="text-[#8f5e56] text-sm">Current Slice</p>
-    <p className="mt-2 font-mono text-[#5b2722] text-sm">
-      {markerStart === null ? "[Start-time]" : formatTime(markerStart)} -{" "}
-      {markerEnd === null ? "[End time]" : formatTime(markerEnd)}
+type DeleteVideoConfirmationCardProps = {
+  isDeletingVideo: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+};
+
+const DeleteVideoConfirmationCard = ({
+  isDeletingVideo,
+  onCancel,
+  onConfirm,
+}: DeleteVideoConfirmationCardProps) => (
+  <div className="rounded-[20px] border border-rose-300 bg-rose-50 px-4 py-3 text-rose-900 text-sm">
+    <p className="font-medium">Delete the current video and its sidecars?</p>
+    <p className="mt-1 text-rose-800 text-xs">
+      This moves the selected video to trash, plus the matching `.srt` and `.analysis.json` files
+      when present.
     </p>
-    <p className="mt-1 text-[#7f524a] text-xs">{toCurrentSliceLabel(markerStart, markerEnd)}</p>
+    <div className="mt-3 flex flex-wrap gap-2">
+      <Button type="button" variant="danger" size="sm" onClick={onConfirm}>
+        {isDeletingVideo ? "Deleting..." : "Confirm Delete"}
+      </Button>
+      <Button type="button" variant="outline" size="sm" onClick={onCancel}>
+        Cancel
+      </Button>
+    </div>
   </div>
+);
+
+type CutVideoStatusMessagesProps = {
+  deleteError: string | null;
+  isCutTaskActive: boolean;
+  isShowingExportOutput: boolean;
+  playbackError: string | null;
+};
+
+const CutVideoStatusMessages = ({
+  deleteError,
+  isCutTaskActive,
+  isShowingExportOutput,
+  playbackError,
+}: CutVideoStatusMessagesProps) => (
+  <>
+    {playbackError ? (
+      <div className="rounded-[20px] border border-amber-300 bg-amber-50 px-4 py-3 text-amber-900 text-sm">
+        {playbackError}
+      </div>
+    ) : null}
+
+    {deleteError ? (
+      <div className="rounded-[20px] border border-rose-300 bg-rose-50 px-4 py-3 text-rose-900 text-sm">
+        {deleteError}
+      </div>
+    ) : null}
+
+    {isCutTaskActive ? (
+      <div className="rounded-[20px] border border-[#ead3c4] bg-[#fffaf6] px-4 py-3 text-[#5b2722] text-sm">
+        Export in progress. The preview will switch to the exported video once the worker finishes.
+      </div>
+    ) : null}
+
+    {isShowingExportOutput && !isCutTaskActive ? (
+      <div className="rounded-[20px] border border-emerald-200 bg-emerald-50 px-4 py-3 text-emerald-800 text-sm">
+        Previewing the exported video output in the main pane.
+      </div>
+    ) : null}
+  </>
 );
 
 type FlaggedSectionsDrawerContentProps = {
   analysisSidecar: AnalysisSidecar | null;
+  canAnalyze: boolean;
+  filter: FlaggedSectionsFilter;
+  flagTask: TaskState | undefined;
+  onFilterChange: (value: FlaggedSectionsFilter) => void;
+  onStartAnalysis: () => void;
   onSeek: (time: number) => void;
+};
+
+type SubtitlesDrawerContentProps = {
+  canTranscribe: boolean;
+  onSeek: (time: number) => void;
+  onStartTranscription: () => void;
+  subtitles: SubtitleEntry[];
+  transcriptionTask: TaskState | undefined;
+};
+
+type FlaggedSectionsFilter = "all" | "high" | "medium" | "low";
+
+type FlaggedPriorityCounts = {
+  high: number;
+  medium: number;
+  low: number;
+};
+
+const flaggedSectionsFilterOptions: Array<{
+  label: string;
+  value: FlaggedSectionsFilter;
+}> = [
+  { label: "All", value: "all" },
+  { label: "Medium", value: "medium" },
+  { label: "Low", value: "low" },
+  { label: "High", value: "high" },
+];
+
+const filterFlaggedSegments = (
+  segments: AnalysisSidecar["flagged"],
+  filter: FlaggedSectionsFilter,
+) => (filter === "all" ? segments : segments.filter((segment) => segment.priority === filter));
+
+const buildFlaggedPriorityCounts = (segments: AnalysisSidecar["flagged"]): FlaggedPriorityCounts =>
+  segments.reduce<FlaggedPriorityCounts>(
+    (counts, segment) => {
+      counts[segment.priority] += 1;
+      return counts;
+    },
+    { high: 0, low: 0, medium: 0 },
+  );
+
+const formatFlaggedSegmentTimeLabel = (segment: AnalysisSidecar["flagged"][number]) => {
+  if (typeof segment.endTime === "number" && Number.isFinite(segment.endTime)) {
+    return `${formatTime(segment.startTime, segment.endTime)} - ${formatTime(
+      segment.endTime,
+      segment.endTime,
+    )}`;
+  }
+
+  return formatTime(segment.startTime);
 };
 
 const FlaggedSectionsDrawerContent = ({
   analysisSidecar,
+  canAnalyze,
+  filter,
+  flagTask,
+  onFilterChange,
+  onStartAnalysis,
   onSeek,
 }: FlaggedSectionsDrawerContentProps) => {
+  const isFlagTaskActive = flagTask?.status === "queued" || flagTask?.status === "running";
+
   if (!analysisSidecar) {
     return (
-      <p className="rounded-[22px] border border-[#e7d2c5] border-dashed bg-[#fff8f3] px-4 py-5 text-[#8f5e56] text-sm">
-        No `.analysis.json` sidecar was found for this video.
-      </p>
+      <div className="space-y-1.5">
+        <p className="rounded-[12px] border border-[#e7d2c5] border-dashed bg-[#fff8f3] px-2.5 py-2.5 text-[#8f5e56] text-xs">
+          Analysis has not been run for this video.
+        </p>
+        <Button
+          type="button"
+          size="sm"
+          onClick={onStartAnalysis}
+          disabled={!canAnalyze || isFlagTaskActive}
+        >
+          {isFlagTaskActive ? (
+            <LoaderCircle className="size-3 animate-spin" />
+          ) : (
+            <ShieldAlert className="size-3" />
+          )}
+          {isFlagTaskActive ? "Analyzing..." : "Run Analysis"}
+        </Button>
+      </div>
     );
   }
 
-  if (analysisSidecar.flagged.length === 0) {
+  const flaggedCounts = buildFlaggedPriorityCounts(analysisSidecar.flagged);
+  const filteredSegments = filterFlaggedSegments(analysisSidecar.flagged, filter);
+
+  return (
+    <div className="space-y-1.5">
+      <div className="rounded-[14px] border border-[#ead3c4] bg-[#fffaf6] px-2.5 py-2">
+        <div className="flex items-start justify-between gap-2">
+          <div className="space-y-0.5">
+            <p className="text-[#8f5e56] text-xs">Summary</p>
+            <p className="text-[#5b2722] text-xs">{analysisSidecar.summary}</p>
+          </div>
+          <Badge variant="queued">{analysisSidecar.engine}</Badge>
+        </div>
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          <Badge variant="failed">High {flaggedCounts.high}</Badge>
+          <Badge variant="running">Medium {flaggedCounts.medium}</Badge>
+          <Badge variant="queued">Low {flaggedCounts.low}</Badge>
+          <Badge variant="queued">Total {analysisSidecar.flagged.length}</Badge>
+        </div>
+      </div>
+      <div className="flex items-center justify-between gap-2 rounded-[12px] border border-[#ead3c4] bg-[#fffaf6] px-2.5 py-2">
+        <div>
+          <p className="text-[#8f5e56] text-xs">Filter</p>
+          <p className="mt-0.5 text-[#5b2722] text-xs">
+            {filteredSegments.length} of {analysisSidecar.flagged.length} section
+            {analysisSidecar.flagged.length === 1 ? "" : "s"}
+          </p>
+        </div>
+        <select
+          value={filter}
+          onChange={(event) => onFilterChange(event.currentTarget.value as FlaggedSectionsFilter)}
+          className="h-9 rounded-[14px] border border-[#d9b7a5] bg-white px-3 text-[#4f1f1a] text-xs outline-none transition focus:border-[#88322d] focus:ring-[#c57267]/25 focus:ring-[2px]"
+        >
+          {flaggedSectionsFilterOptions.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </div>
+      {analysisSidecar.flagged.length === 0 ? (
+        <p className="rounded-[12px] border border-[#e7d2c5] border-dashed bg-[#fff8f3] px-2.5 py-2.5 text-[#8f5e56] text-xs">
+          Analysis exists, but no flagged sections were found.
+        </p>
+      ) : filteredSegments.length === 0 ? (
+        <p className="rounded-[12px] border border-[#e7d2c5] border-dashed bg-[#fff8f3] px-2.5 py-2.5 text-[#8f5e56] text-xs">
+          No flagged sections match the selected filter.
+        </p>
+      ) : (
+        filteredSegments.map((segment) => (
+          <button
+            key={`${segment.startTime}-${segment.endTime}-${segment.ruleId}`}
+            type="button"
+            onClick={() => onSeek(segment.startTime)}
+            className="w-full rounded-[12px] border border-[#ead3c4] bg-[#fffaf7] px-2 py-1.5 text-left transition hover:border-[#c57267] hover:bg-white"
+          >
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Badge
+                variant={
+                  segment.priority === "high"
+                    ? "failed"
+                    : segment.priority === "medium"
+                      ? "running"
+                      : "queued"
+                }
+              >
+                {segment.priority}
+              </Badge>
+              <span className="font-mono text-[#7f524a] text-xs">
+                {formatFlaggedSegmentTimeLabel(segment)}
+              </span>
+            </div>
+            <p className="mt-1 font-medium text-[#5b2722] text-xs">{segment.reason}</p>
+            <p className="mt-0.5 text-[#7f524a] text-xs">{segment.text}</p>
+          </button>
+        ))
+      )}
+    </div>
+  );
+};
+
+const SubtitlesDrawerContent = ({
+  canTranscribe,
+  onSeek,
+  onStartTranscription,
+  subtitles,
+  transcriptionTask,
+}: SubtitlesDrawerContentProps) => {
+  const isTranscriptionTaskActive =
+    transcriptionTask?.status === "queued" || transcriptionTask?.status === "running";
+
+  if (subtitles.length === 0) {
     return (
-      <p className="rounded-[22px] border border-[#e7d2c5] border-dashed bg-[#fff8f3] px-4 py-5 text-[#8f5e56] text-sm">
-        Analysis exists, but no flagged sections were found.
-      </p>
+      <div className="space-y-1.5">
+        <p className="rounded-[12px] border border-[#e7d2c5] border-dashed bg-[#fff8f3] px-2.5 py-2.5 text-[#8f5e56] text-xs">
+          No subtitles detected.
+        </p>
+        <Button
+          type="button"
+          size="sm"
+          onClick={onStartTranscription}
+          disabled={!canTranscribe || isTranscriptionTaskActive}
+        >
+          {isTranscriptionTaskActive ? (
+            <LoaderCircle className="size-3 animate-spin" />
+          ) : (
+            <Captions className="size-3" />
+          )}
+          {isTranscriptionTaskActive ? "Transcribing..." : "Generate Subtitles"}
+        </Button>
+      </div>
     );
   }
 
   return (
-    <div className="space-y-3">
-      {analysisSidecar.flagged.map((segment) => (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between gap-2 rounded-[12px] border border-[#ead3c4] bg-[#fffaf6] px-2.5 py-2">
+        <p className="font-medium text-[#5b2722] text-xs">Subtitles</p>
+        <Badge variant="queued">{subtitles.length}</Badge>
+      </div>
+      {subtitles.map((subtitle) => (
         <button
-          key={`${segment.startTime}-${segment.endTime}-${segment.ruleId}`}
+          key={subtitle.index}
           type="button"
-          onClick={() => onSeek(segment.startTime)}
-          className="w-full rounded-[18px] border border-[#ead3c4] bg-[#fffaf7] px-3 py-3 text-left transition hover:border-[#c57267] hover:bg-white"
+          onClick={() => onSeek(subtitle.startTime)}
+          className="w-full rounded-[12px] border border-[#ead3c4] bg-[#fffaf7] px-2 py-1.5 text-left transition hover:border-[#c57267] hover:bg-white"
         >
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge
-              variant={
-                segment.priority === "high"
-                  ? "failed"
-                  : segment.priority === "medium"
-                    ? "running"
-                    : "queued"
-              }
-            >
-              {segment.priority}
-            </Badge>
-            <span className="font-mono text-[#7f524a] text-xs">
-              {formatTime(segment.startTime, segment.endTime)} -{" "}
-              {formatTime(segment.endTime, segment.endTime)}
-            </span>
-          </div>
-          <p className="mt-2 font-medium text-[#5b2722] text-sm">{segment.reason}</p>
-          <p className="mt-1 text-[#7f524a] text-sm">{segment.text}</p>
+          <span className="font-mono text-[#7f524a] text-xs">
+            {formatTime(subtitle.startTime, subtitle.endTime)} -{" "}
+            {formatTime(subtitle.endTime, subtitle.endTime)}
+          </span>
+          <p className="mt-1 text-[#5b2722] text-xs">{subtitle.text}</p>
         </button>
       ))}
     </div>
   );
 };
 
-const CurrentSubtitleCard = ({
+const SubtitleOverlay = ({
   currentTime,
   hasSubtitleSidecar,
   playbackError,
@@ -207,35 +490,120 @@ const CurrentSubtitleCard = ({
   playbackError: string | null;
   subtitle?: SubtitleEntry;
 }) => {
-  if (playbackError) {
+  if (playbackError || !hasSubtitleSidecar || !subtitle?.text) {
     return null;
   }
 
+  const timeLabel = subtitle
+    ? `${formatTime(subtitle.startTime, subtitle.endTime)} - ${formatTime(subtitle.endTime, subtitle.endTime)}`
+    : formatTime(currentTime, currentTime);
+
   return (
-    <div className="rounded-[22px] border border-[#ead3c4] bg-[#fffaf6] px-3 py-3">
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-[#8f5e56] text-sm">Subtitle At Cursor</p>
-        <span className="font-mono text-[#7f524a] text-xs">
-          {formatTime(currentTime, currentTime)}
+    <div className="pointer-events-none absolute inset-x-0 top-0 flex justify-center p-3">
+      <div className="max-w-[min(100%-1.5rem,52rem)] rounded-[18px] border border-white/15 bg-black/55 px-4 py-2.5 text-center shadow-[0_10px_30px_rgba(0,0,0,0.45)] backdrop-blur-sm">
+        <p className="font-mono text-[10px] text-white/70 uppercase tracking-[0.2em]">
+          {timeLabel}
+        </p>
+        <p className="mt-1 text-balance text-sm text-white leading-5">{subtitle.text}</p>
+      </div>
+    </div>
+  );
+};
+
+type VideoControlsProps = {
+  currentTime: number;
+  duration: number;
+  hoverPosition: number | null;
+  hoverTime: number | null;
+  isPlaying: boolean;
+  onSeek: (time: number) => void;
+  onSeekBackwardTen: () => void;
+  onSeekForwardTen: () => void;
+  onSeekHover: (time: number, position: number) => void;
+  onSeekHoverEnd: () => void;
+  onTogglePlayback: () => void;
+};
+
+const VideoControls = ({
+  currentTime,
+  duration,
+  hoverPosition,
+  hoverTime,
+  isPlaying,
+  onSeek,
+  onSeekBackwardTen,
+  onSeekForwardTen,
+  onSeekHover,
+  onSeekHoverEnd,
+  onTogglePlayback,
+}: VideoControlsProps) => {
+  return (
+    <div className="absolute inset-x-0 bottom-0 p-3">
+      <div className="flex items-center gap-2 rounded-[18px] border border-white/12 bg-black/45 px-3 py-2 text-white shadow-[0_10px_30px_rgba(0,0,0,0.38)] backdrop-blur-md">
+        <button
+          type="button"
+          onClick={onSeekBackwardTen}
+          className="flex h-8 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/10 px-2.5 font-semibold text-[11px] transition hover:bg-white/18"
+          aria-label="Seek backward 10 seconds"
+        >
+          -10s
+        </button>
+        <button
+          type="button"
+          onClick={onTogglePlayback}
+          className="flex size-8 shrink-0 items-center justify-center rounded-full bg-white/10 transition hover:bg-white/18"
+          aria-label={isPlaying ? "Pause video" : "Play video"}
+        >
+          {isPlaying ? (
+            <Pause className="size-3.5 fill-current" />
+          ) : (
+            <Play className="ml-0.5 size-3.5 fill-current" />
+          )}
+        </button>
+        <button
+          type="button"
+          onClick={onSeekForwardTen}
+          className="flex h-8 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/10 px-2.5 font-semibold text-[11px] transition hover:bg-white/18"
+          aria-label="Seek forward 10 seconds"
+        >
+          +10s
+        </button>
+        <span className="w-12 shrink-0 text-right font-mono text-[11px] text-white/80 tabular-nums">
+          {formatTime(currentTime, duration)}
+        </span>
+        <div className="relative min-w-0 flex-1">
+          {hoverTime !== null && hoverPosition !== null ? (
+            <div
+              className="pointer-events-none absolute bottom-full mb-2 -translate-x-1/2 rounded-full border border-white/15 bg-black/80 px-2 py-1 font-mono text-[10px] text-white shadow-[0_8px_20px_rgba(0,0,0,0.3)]"
+              style={{ left: `${hoverPosition}%` }}
+            >
+              {formatTime(hoverTime, duration)}
+            </div>
+          ) : null}
+          <input
+            type="range"
+            min={0}
+            max={duration || 0}
+            step={0.1}
+            value={Math.min(currentTime, duration || 0)}
+            onChange={(event) => onSeek(Number(event.currentTarget.value))}
+            onMouseLeave={onSeekHoverEnd}
+            onMouseMove={(event) => {
+              const rect = event.currentTarget.getBoundingClientRect();
+              if (rect.width <= 0) {
+                return;
+              }
+              const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+              onSeekHover(clampSeekTime(duration * ratio, duration), ratio * 100);
+            }}
+            className="h-2 w-full cursor-pointer appearance-none rounded-full bg-white/20 accent-white"
+            aria-label="Seek video"
+          />
+        </div>
+        <span className="w-12 shrink-0 font-mono text-[11px] text-white/80 tabular-nums">
+          {formatTime(duration)}
         </span>
       </div>
-      {!hasSubtitleSidecar ? (
-        <p className="mt-2 text-[#7f524a] text-sm">
-          No `.srt` sidecar was found for this video yet.
-        </p>
-      ) : subtitle ? (
-        <div className="mt-2 rounded-[18px] border border-[#ead3c4] bg-white px-3 py-2.5">
-          <p className="font-mono text-[#7f524a] text-xs">
-            {formatTime(subtitle.startTime, subtitle.endTime)} -{" "}
-            {formatTime(subtitle.endTime, subtitle.endTime)}
-          </p>
-          <p className="mt-1 text-[#5b2722] text-sm">{subtitle.text}</p>
-        </div>
-      ) : (
-        <p className="mt-2 text-[#7f524a] text-sm">
-          No subtitle is active at the current playback time.
-        </p>
-      )}
     </div>
   );
 };
@@ -274,23 +642,23 @@ const RangesDrawerContent = ({
   ranges,
 }: RangesDrawerContentProps) => (
   <div className="flex min-h-0 flex-1 flex-col">
-    <div className="flex items-start justify-between gap-4">
-      <div className="flex flex-col gap-1">
-        <h3 className="font-semibold text-[#5b2722] text-xl">Cut Task And Ranges</h3>
-        <p className="text-[#8f5e56] text-sm">
+    <div className="flex items-start justify-between gap-2">
+      <div className="flex flex-col gap-0.5">
+        <h3 className="font-semibold text-[#5b2722] text-sm">Cut Task And Ranges</h3>
+        <p className="text-[#8f5e56] text-xs">
           Export status and the full list of saved cut ranges for this session.
         </p>
       </div>
       <DrawerClose>Close</DrawerClose>
     </div>
-    <div className="mt-4 min-h-0 flex-1 space-y-4 overflow-auto pr-1">
+    <div className="mt-2 min-h-0 flex-1 space-y-2 overflow-auto pr-1">
       {cutTask ? (
-        <div className="rounded-[20px] border border-[#ead3c4] bg-[#fffaf6] px-4 py-3">
-          <div className="flex items-center justify-between gap-3">
-            <p className="font-medium text-[#5b2722] text-sm">{cutTask.taskId}</p>
+        <div className="rounded-[14px] border border-[#ead3c4] bg-[#fffaf6] px-2.5 py-2">
+          <div className="flex items-center justify-between gap-2">
+            <p className="font-medium text-[#5b2722] text-xs">{cutTask.taskId}</p>
             <Badge variant={toTaskStatusVariant(cutTask.status)}>{cutTask.status}</Badge>
           </div>
-          <p className="mt-2 text-[#8f5e56] text-sm">
+          <p className="mt-1 text-[#8f5e56] text-xs">
             {isExporting ? "Export in progress..." : "Ready."}
           </p>
           {cutOutputPath ? (
@@ -298,7 +666,7 @@ const RangesDrawerContent = ({
               type="button"
               variant="outline"
               size="sm"
-              className="mt-3"
+              className="mt-2"
               onClick={() => onOpenOutput(cutOutputPath)}
             >
               Preview Output
@@ -306,37 +674,34 @@ const RangesDrawerContent = ({
           ) : null}
         </div>
       ) : (
-        <p className="rounded-[22px] border border-[#e7d2c5] border-dashed bg-[#fff8f3] px-4 py-5 text-[#8f5e56] text-sm">
+        <p className="rounded-[12px] border border-[#e7d2c5] border-dashed bg-[#fff8f3] px-2.5 py-2.5 text-[#8f5e56] text-xs">
           No cut task has run yet.
         </p>
       )}
 
-      <div className="space-y-3">
-        <div className="flex items-center justify-between gap-3">
-          <p className="font-medium text-[#5b2722] text-sm">Saved Ranges</p>
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between gap-2">
+          <p className="font-medium text-[#5b2722] text-xs">Saved Ranges</p>
           <Badge variant="queued">{ranges.length}</Badge>
         </div>
         {ranges.length === 0 ? (
-          <p className="rounded-[22px] border border-[#e7d2c5] border-dashed bg-[#fff8f3] px-4 py-5 text-[#8f5e56] text-sm">
+          <p className="rounded-[12px] border border-[#e7d2c5] border-dashed bg-[#fff8f3] px-2.5 py-2.5 text-[#8f5e56] text-xs">
             No ranges yet.
           </p>
         ) : (
           ranges.map((range) => (
-            <div
-              key={range.id}
-              className="rounded-[22px] border border-[#ead3c4] bg-[#fffaf7] p-3.5"
-            >
-              <p className="font-mono text-[#5f2823] text-sm">
+            <div key={range.id} className="rounded-[14px] border border-[#ead3c4] bg-[#fffaf7] p-2">
+              <p className="font-mono text-[#5f2823] text-xs">
                 {formatTime(range.start)} - {formatTime(range.end)}
               </p>
               <Button
                 type="button"
                 variant="ghost"
                 size="sm"
-                className="mt-2"
+                className="mt-1"
                 onClick={() => onRemoveRange(range.id)}
               >
-                <Trash2 className="size-4" />
+                <Trash2 className="size-3" />
                 Remove
               </Button>
             </div>
@@ -347,7 +712,7 @@ const RangesDrawerContent = ({
   </div>
 );
 
-const SimpleCutEditorPanel = ({ controller }: SimpleCutEditorPanelProps) => {
+const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProps) => {
   const [videoPath, setVideoPath] = useState<string | null>(null);
   const [selectedVideoPath, setSelectedVideoPath] = useState<string | null>(null);
   const [markerStart, setMarkerStart] = useState<number | null>(null);
@@ -356,17 +721,77 @@ const SimpleCutEditorPanel = ({ controller }: SimpleCutEditorPanelProps) => {
   const [isExporting, setIsExporting] = useState(false);
   const [isShowingExportOutput, setIsShowingExportOutput] = useState(false);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
+  const [flaggedSectionsFilter, setFlaggedSectionsFilter] = useState<FlaggedSectionsFilter>("all");
   const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [hoverSeekTime, setHoverSeekTime] = useState<number | null>(null);
+  const [hoverSeekPosition, setHoverSeekPosition] = useState<number | null>(null);
+  const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
+  const [isDeletingVideo, setIsDeletingVideo] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [compressionPreset, setCompressionPreset] = useState<CompressionPreset>("max_compression");
+  const [isDropTargetActive, setIsDropTargetActive] = useState(false);
+  const [sidecarRefreshKey, setSidecarRefreshKey] = useState(0);
   const [subtitles, setSubtitles] = useState<SubtitleEntry[]>([]);
   const [hasSubtitleSidecar, setHasSubtitleSidecar] = useState(false);
   const [analysisSidecar, setAnalysisSidecar] = useState<AnalysisSidecar | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const dropTargetRef = useRef<HTMLDivElement>(null);
 
   const cutTask = getLatestTask(controller.state.tasksById, "cut");
+  const transcriptionTask = getLatestTask(controller.state.tasksById, "transcription");
+  const flagTask = getLatestTask(controller.state.tasksById, "flag");
   const cutOutputPath = getTaskOutputPath(cutTask);
   const currentSubtitle = findSubtitleAtTime(subtitles, currentTime);
   const isCutTaskActive =
     isExporting || cutTask?.status === "queued" || cutTask?.status === "running";
+  const hasStartedMarking = markerStart !== null;
+  const cutFromLabel = `Cut from ${formatTime(
+    markerStart ?? currentTime,
+    Number.isFinite(duration) && duration > 0 ? duration : currentTime,
+  )}`;
+  const cutUntilLabel = `Cut Until ${formatTime(
+    markerEnd ?? currentTime,
+    Number.isFinite(duration) && duration > 0 ? duration : currentTime,
+  )}`;
+  const hasSubtitleSidecarLoaded = hasSubtitleSidecar && videoPath !== null;
+  const hasAnalysisSidecarLoaded = analysisSidecar !== null;
+  const srtSidecarPath = videoPath ? toSrtSidecarPath(videoPath) : null;
+  const sidecarTaskRefreshSignature = [
+    transcriptionTask?.status,
+    transcriptionTask?.jobs
+      .map((job) => `${job.inputPath}:${job.status}:${job.outputPath ?? ""}`)
+      .join(","),
+    flagTask?.status,
+    flagTask?.jobs.map((job) => `${job.inputPath}:${job.status}:${job.outputPath ?? ""}`).join(","),
+  ].join("|");
+
+  const applySelectedVideoPath = useCallback(
+    (selected: string | null, shouldSyncController = true) => {
+      if (shouldSyncController) {
+        controller.selectVideo(selected);
+      }
+      setVideoPath(selected);
+      setSelectedVideoPath(selected);
+      setRanges([]);
+      setMarkerStart(null);
+      setMarkerEnd(null);
+      setPlaybackError(null);
+      setCurrentTime(0);
+      setDuration(0);
+      setIsPlaying(false);
+      setHoverSeekTime(null);
+      setHoverSeekPosition(null);
+      setIsDeleteConfirmOpen(false);
+      setIsShowingExportOutput(false);
+      setDeleteError(null);
+      if (videoRef.current) {
+        videoRef.current.load();
+      }
+    },
+    [controller],
+  );
 
   useEffect(() => {
     if (
@@ -381,13 +806,24 @@ const SimpleCutEditorPanel = ({ controller }: SimpleCutEditorPanelProps) => {
     setVideoPath(cutOutputPath);
     setPlaybackError(null);
     setCurrentTime(0);
+    setDuration(0);
+    setIsPlaying(false);
+    setHoverSeekTime(null);
+    setHoverSeekPosition(null);
+    setIsDeleteConfirmOpen(false);
     setIsShowingExportOutput(true);
+    setDeleteError(null);
   }, [cutOutputPath, cutTask?.jobs, cutTask?.status, selectedVideoPath]);
 
   useEffect(() => {
     let cancelled = false;
+    const refreshKey = sidecarRefreshKey;
 
     const loadSidecars = async () => {
+      if (refreshKey < 0) {
+        return;
+      }
+
       if (!videoPath) {
         resetLoadedSidecars(setAnalysisSidecar, setHasSubtitleSidecar, setSubtitles);
         return;
@@ -423,7 +859,90 @@ const SimpleCutEditorPanel = ({ controller }: SimpleCutEditorPanelProps) => {
     return () => {
       cancelled = true;
     };
-  }, [videoPath]);
+  }, [sidecarRefreshKey, videoPath]);
+
+  useEffect(() => {
+    if (!sidecarTaskRefreshSignature) {
+      return;
+    }
+
+    setSidecarRefreshKey((previous) => previous + 1);
+  }, [sidecarTaskRefreshSignature]);
+
+  useEffect(() => {
+    if (!isActive) {
+      setIsDropTargetActive(false);
+      return;
+    }
+
+    const requestedVideoPath = controller.state.selectedVideoPath;
+    if (!requestedVideoPath || requestedVideoPath === videoPath) {
+      return;
+    }
+
+    applySelectedVideoPath(requestedVideoPath, false);
+  }, [applySelectedVideoPath, controller.state.selectedVideoPath, isActive, videoPath]);
+
+  useEffect(() => {
+    if (!isActive) {
+      setIsDropTargetActive(false);
+      return;
+    }
+
+    let mounted = true;
+
+    const handleDragDropEvent = async (event: { payload: DragDropEvent }) => {
+      if (!mounted) {
+        return;
+      }
+
+      if (event.payload.type === "leave") {
+        setIsDropTargetActive(false);
+        return;
+      }
+
+      if (event.payload.type === "over" || event.payload.type === "enter") {
+        setIsDropTargetActive(isWithinDropTarget(dropTargetRef, event.payload.position));
+        return;
+      }
+
+      const droppedInsideTarget = isWithinDropTarget(dropTargetRef, event.payload.position);
+      setIsDropTargetActive(false);
+      if (!droppedInsideTarget) {
+        return;
+      }
+
+      const droppedPath = event.payload.paths
+        .map((path) => normalizeDialogPath(path))
+        .find((path) => isSupportedCutVideoPath(path));
+      if (!droppedPath) {
+        return;
+      }
+
+      applySelectedVideoPath(droppedPath);
+    };
+
+    let cleanup: (() => void) | undefined;
+    const setup = async () => {
+      const unlisten = await getCurrentWindow().onDragDropEvent((event) => {
+        void handleDragDropEvent(event);
+      });
+      return unlisten;
+    };
+
+    setup()
+      .then((unlisten) => {
+        cleanup = unlisten;
+      })
+      .catch(() => {
+        setIsDropTargetActive(false);
+      });
+
+    return () => {
+      mounted = false;
+      cleanup?.();
+    };
+  }, [applySelectedVideoPath, isActive]);
 
   const chooseVideo = async () => {
     const response = await open({
@@ -433,17 +952,7 @@ const SimpleCutEditorPanel = ({ controller }: SimpleCutEditorPanelProps) => {
     });
     const selectedPath = toPathList(response as string | string[] | null).at(0) ?? null;
     const selected = selectedPath ? normalizeDialogPath(selectedPath) : null;
-    setVideoPath(selected);
-    setSelectedVideoPath(selected);
-    setRanges([]);
-    setMarkerStart(null);
-    setMarkerEnd(null);
-    setPlaybackError(null);
-    setCurrentTime(0);
-    setIsShowingExportOutput(false);
-    if (videoRef.current) {
-      videoRef.current.load();
-    }
+    applySelectedVideoPath(selected);
   };
 
   const handleVideoError = () => {
@@ -478,24 +987,28 @@ const SimpleCutEditorPanel = ({ controller }: SimpleCutEditorPanelProps) => {
   };
 
   const markEnd = () => {
-    if (!videoRef.current) {
+    if (!videoRef.current || markerStart === null) {
       return;
     }
-    setMarkerEnd(videoRef.current.currentTime);
-  };
+    const endTime = videoRef.current.currentTime;
+    setMarkerEnd(endTime);
 
-  const addRange = () => {
-    if (markerStart === null || markerEnd === null || markerEnd <= markerStart) {
+    if (endTime <= markerStart) {
       return;
     }
+
     setRanges((previous) => [
       ...previous,
       {
-        end: markerEnd,
-        id: `${markerStart}-${markerEnd}-${previous.length}`,
+        end: endTime,
+        id: `${markerStart}-${endTime}-${previous.length}`,
         start: markerStart,
       },
     ]);
+    resetMarking();
+  };
+
+  const resetMarking = () => {
     setMarkerStart(null);
     setMarkerEnd(null);
   };
@@ -507,31 +1020,122 @@ const SimpleCutEditorPanel = ({ controller }: SimpleCutEditorPanelProps) => {
     setSelectedVideoPath(videoPath);
     setIsExporting(true);
     try {
-      await controller.startCut(videoPath, toCutRanges(ranges));
+      await controller.startCut(videoPath, toCutRanges(ranges), compressionPreset);
     } finally {
       setIsExporting(false);
     }
   };
 
+  const startSubtitleGeneration = async () => {
+    if (!videoPath) {
+      return;
+    }
+    await controller.startTranscriptionForPaths([videoPath]);
+  };
+
+  const startFlaggedSectionAnalysis = async () => {
+    if (!srtSidecarPath) {
+      return;
+    }
+    await controller.startFlaggingForPaths([srtSidecarPath]);
+  };
+
+  const togglePlayback = () => {
+    if (!videoRef.current) {
+      return;
+    }
+
+    if (videoRef.current.paused) {
+      void videoRef.current.play().catch(() => undefined);
+      return;
+    }
+
+    videoRef.current.pause();
+  };
+
+  const seekTo = (time: number) => {
+    if (!videoRef.current) {
+      return;
+    }
+    const nextTime = clampSeekTime(time, duration);
+    videoRef.current.currentTime = nextTime;
+    setCurrentTime(nextTime);
+  };
+
+  const seekBackwardTen = () => {
+    seekTo(currentTime - 10);
+  };
+
+  const seekForwardTen = () => {
+    seekTo(currentTime + 10);
+  };
+
+  const openDeleteConfirmation = () => {
+    setDeleteError(null);
+    setIsDeleteConfirmOpen(true);
+  };
+
+  const cancelDeleteConfirmation = () => {
+    setIsDeleteConfirmOpen(false);
+  };
+
+  const confirmDeleteCurrentVideo = async () => {
+    if (!videoPath) {
+      return;
+    }
+
+    setDeleteError(null);
+    setIsDeletingVideo(true);
+
+    try {
+      await deleteVideoFiles({
+        hasAnalysisSidecar: hasAnalysisSidecarLoaded,
+        hasSubtitleSidecar: hasSubtitleSidecarLoaded,
+        videoPath,
+      });
+
+      setVideoPath(null);
+      setSelectedVideoPath(null);
+      controller.selectVideo(null);
+      setRanges([]);
+      setMarkerStart(null);
+      setMarkerEnd(null);
+      setPlaybackError(null);
+      setCurrentTime(0);
+      setDuration(0);
+      setIsPlaying(false);
+      setHoverSeekTime(null);
+      setHoverSeekPosition(null);
+      setIsShowingExportOutput(false);
+      setIsDeleteConfirmOpen(false);
+      resetLoadedSidecars(setAnalysisSidecar, setHasSubtitleSidecar, setSubtitles);
+    } catch (error) {
+      setDeleteError(
+        error instanceof Error ? error.message : "Failed deleting the selected files.",
+      );
+    } finally {
+      setIsDeletingVideo(false);
+    }
+  };
+
   return (
     <Card>
-      <CardHeader className="grid grid-cols-[1fr_auto] gap-4">
+      <CardHeader className="grid grid-cols-[1fr_auto] gap-2">
         <div>
-          <CardTitle className="flex items-center gap-3">
-            <span className="flex size-10 items-center justify-center rounded-2xl bg-[#f5e6dc] text-[#88322d]">
-              <Scissors className="size-4" />
+          <CardTitle className="flex items-center gap-1.5">
+            <span className="flex size-7 items-center justify-center rounded-lg bg-[#f5e6dc] text-[#88322d]">
+              <Scissors className="size-3" />
             </span>
-            Cut Video
+            Edit Video
           </CardTitle>
-          <p className="mt-1.5 text-[#8f5e56] text-sm">
-            Choose a video, mark the slice you want to remove, review subtitles at the current time,
-            and export exact cut ranges.
+          <p className="mt-0.5 text-[#8f5e56] text-xs">
+            Review video, mark segments, and export cuts.
           </p>
         </div>
         <TaskDrawer
           triggerLabel="Ranges And Task"
           title="Cut Task And Ranges"
-          description="Export status and the full list of saved cut ranges for this session."
+          description="Export status and saved segments."
         >
           <RangesDrawerContent
             cutOutputPath={cutOutputPath}
@@ -550,12 +1154,30 @@ const SimpleCutEditorPanel = ({ controller }: SimpleCutEditorPanelProps) => {
           />
         </TaskDrawer>
         <TaskDrawer
+          triggerLabel="Subtitles"
+          title="Subtitles"
+          description="Review or generate subtitle sidecars."
+        >
+          <SubtitlesDrawerContent
+            canTranscribe={videoPath !== null}
+            onSeek={seekTo}
+            onStartTranscription={startSubtitleGeneration}
+            subtitles={subtitles}
+            transcriptionTask={transcriptionTask}
+          />
+        </TaskDrawer>
+        <TaskDrawer
           triggerLabel="Flagged Sections"
           title="Flagged Sections"
-          description="Jump directly to timestamps that were flagged in the analysis sidecar."
+          description="Quick jump to flagged content."
         >
           <FlaggedSectionsDrawerContent
             analysisSidecar={analysisSidecar}
+            canAnalyze={srtSidecarPath !== null && hasSubtitleSidecar}
+            filter={flaggedSectionsFilter}
+            flagTask={flagTask}
+            onFilterChange={setFlaggedSectionsFilter}
+            onStartAnalysis={startFlaggedSectionAnalysis}
             onSeek={(time) => {
               if (!videoRef.current) {
                 return;
@@ -566,110 +1188,157 @@ const SimpleCutEditorPanel = ({ controller }: SimpleCutEditorPanelProps) => {
           />
         </TaskDrawer>
       </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="flex flex-wrap gap-2">
-          <Button type="button" variant="secondary" size="sm" onClick={chooseVideo}>
-            <Film className="size-4" />
-            Choose Video
-          </Button>
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            onClick={markStart}
-            disabled={!videoPath}
-          >
-            Mark Start
-          </Button>
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            onClick={markEnd}
-            disabled={!videoPath}
-          >
-            Mark End
-          </Button>
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            onClick={addRange}
-            disabled={!videoPath}
-          >
-            <Plus className="size-4" />
-            Add Range
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            onClick={startCutExport}
-            disabled={!videoPath || ranges.length === 0 || isCutTaskActive}
-          >
-            {isCutTaskActive ? <LoaderCircle className="size-4 animate-spin" /> : null}
-            {isCutTaskActive ? "Exporting..." : "Export"}
-          </Button>
-          <Button
-            type="button"
-            variant="danger"
-            size="sm"
-            onClick={() => controller.cancelTaskById(cutTask?.taskId ?? null)}
-          >
-            Cancel Task
-          </Button>
-        </div>
+      <CardContent>
+        <div
+          ref={dropTargetRef}
+          className={`space-y-2 rounded-[16px] transition ${
+            isDropTargetActive
+              ? "bg-[#fff1e8] shadow-[0_0_0_2px_rgba(197,114,103,0.15)]"
+              : "bg-transparent"
+          }`}
+        >
+          <div className="flex flex-wrap gap-1.5">
+            <Button type="button" variant="secondary" size="sm" onClick={chooseVideo}>
+              <Film className="size-3" />
+              Choose Video
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={markStart}
+              disabled={!videoPath || hasStartedMarking}
+            >
+              {cutFromLabel}
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={markEnd}
+              disabled={!videoPath || !hasStartedMarking}
+            >
+              {cutUntilLabel}
+            </Button>
+            {hasStartedMarking ? (
+              <Button type="button" variant="outline" size="sm" onClick={resetMarking}>
+                Cancel Marking
+              </Button>
+            ) : null}
+            <label className="flex items-center gap-1.5 text-[#5b2722] text-xs">
+              <span className="text-[#8f5e56]">Quality</span>
+              <select
+                value={compressionPreset}
+                onChange={(event) =>
+                  setCompressionPreset(event.currentTarget.value as CompressionPreset)
+                }
+                disabled={isCutTaskActive}
+                className="h-8 rounded-[14px] border border-[#d9b7a5] bg-white px-2 text-[#4f1f1a] text-xs outline-none transition focus:border-[#88322d] focus:ring-[#c57267]/25 focus:ring-[2px] disabled:opacity-50"
+              >
+                <option value="max_compression">Max compression (HEVC)</option>
+                <option value="balanced">Balanced (H.264)</option>
+              </select>
+            </label>
+            <Button
+              type="button"
+              size="sm"
+              onClick={startCutExport}
+              disabled={!videoPath || ranges.length === 0 || isCutTaskActive}
+            >
+              {isCutTaskActive ? <LoaderCircle className="size-3 animate-spin" /> : null}
+              {isCutTaskActive ? "Exporting..." : "Export"}
+            </Button>
+            {isCutTaskActive ? (
+              <Button
+                type="button"
+                variant="danger"
+                size="sm"
+                onClick={() => controller.cancelTaskById(cutTask?.taskId ?? null)}
+              >
+                Cancel Task
+              </Button>
+            ) : null}
+            <Button
+              type="button"
+              variant="danger"
+              size="sm"
+              onClick={openDeleteConfirmation}
+              disabled={!videoPath || isCutTaskActive || isDeletingVideo}
+            >
+              <Trash2 className="size-3" />
+              Delete Video
+            </Button>
+          </div>
 
-        <div className="grid gap-3 xl:grid-cols-[280px_minmax(0,1fr)]">
-          <CurrentSliceCard markerEnd={markerEnd} markerStart={markerStart} />
-          <CurrentSubtitleCard
-            currentTime={currentTime}
-            hasSubtitleSidecar={hasSubtitleSidecar}
+          {isDeleteConfirmOpen ? (
+            <DeleteVideoConfirmationCard
+              isDeletingVideo={isDeletingVideo}
+              onCancel={cancelDeleteConfirmation}
+              onConfirm={confirmDeleteCurrentVideo}
+            />
+          ) : null}
+
+          {videoPath ? (
+            <div className="relative overflow-hidden rounded-[24px] border border-[#ead3c4] bg-black shadow-[0_18px_40px_rgba(0,0,0,0.12)]">
+              <video
+                key={videoPath}
+                ref={videoRef}
+                src={convertFileSrc(videoPath)}
+                playsInline
+                preload="metadata"
+                onLoadedData={() => setPlaybackError(null)}
+                onLoadedMetadata={() => setDuration(videoRef.current?.duration ?? 0)}
+                onPlay={() => setIsPlaying(true)}
+                onPause={() => setIsPlaying(false)}
+                onEnded={() => setIsPlaying(false)}
+                onTimeUpdate={() => setCurrentTime(videoRef.current?.currentTime ?? 0)}
+                onError={handleVideoError}
+                onClick={togglePlayback}
+                className="aspect-video w-full cursor-pointer bg-black"
+              >
+                <track kind="captions" />
+              </video>
+              <SubtitleOverlay
+                currentTime={currentTime}
+                hasSubtitleSidecar={hasSubtitleSidecar}
+                playbackError={playbackError}
+                subtitle={currentSubtitle}
+              />
+              {!playbackError ? (
+                <VideoControls
+                  currentTime={currentTime}
+                  duration={duration}
+                  hoverPosition={hoverSeekPosition}
+                  hoverTime={hoverSeekTime}
+                  isPlaying={isPlaying}
+                  onSeek={seekTo}
+                  onSeekBackwardTen={seekBackwardTen}
+                  onSeekForwardTen={seekForwardTen}
+                  onSeekHover={(time, position) => {
+                    setHoverSeekTime(time);
+                    setHoverSeekPosition(position);
+                  }}
+                  onSeekHoverEnd={() => {
+                    setHoverSeekTime(null);
+                    setHoverSeekPosition(null);
+                  }}
+                  onTogglePlayback={togglePlayback}
+                />
+              ) : null}
+            </div>
+          ) : (
+            <div className="rounded-[22px] border border-[#e7d2c5] border-dashed bg-[#fff8f3] px-5 py-8 text-[#8f5e56] text-sm">
+              Choose a video file to begin.
+            </div>
+          )}
+
+          <CutVideoStatusMessages
+            deleteError={deleteError}
+            isCutTaskActive={isCutTaskActive}
+            isShowingExportOutput={isShowingExportOutput}
             playbackError={playbackError}
-            subtitle={currentSubtitle}
           />
         </div>
-
-        {videoPath ? (
-          <div className="overflow-hidden rounded-[24px] border border-[#ead3c4] bg-black shadow-[0_18px_40px_rgba(0,0,0,0.12)]">
-            <video
-              key={videoPath}
-              ref={videoRef}
-              src={convertFileSrc(videoPath)}
-              controls
-              playsInline
-              preload="metadata"
-              onLoadedData={() => setPlaybackError(null)}
-              onTimeUpdate={() => setCurrentTime(videoRef.current?.currentTime ?? 0)}
-              onError={handleVideoError}
-              className="aspect-video w-full bg-black"
-            >
-              <track kind="captions" />
-            </video>
-          </div>
-        ) : (
-          <div className="rounded-[22px] border border-[#e7d2c5] border-dashed bg-[#fff8f3] px-5 py-8 text-[#8f5e56] text-sm">
-            Choose a video file to begin.
-          </div>
-        )}
-
-        {playbackError ? (
-          <div className="rounded-[20px] border border-amber-300 bg-amber-50 px-4 py-3 text-amber-900 text-sm">
-            {playbackError}
-          </div>
-        ) : null}
-
-        {isCutTaskActive ? (
-          <div className="rounded-[20px] border border-[#ead3c4] bg-[#fffaf6] px-4 py-3 text-[#5b2722] text-sm">
-            Export in progress. The preview will switch to the exported video once the worker
-            finishes.
-          </div>
-        ) : null}
-
-        {isShowingExportOutput && !isCutTaskActive ? (
-          <div className="rounded-[20px] border border-emerald-200 bg-emerald-50 px-4 py-3 text-emerald-800 text-sm">
-            Previewing the exported video output in the main pane.
-          </div>
-        ) : null}
       </CardContent>
     </Card>
   );

@@ -26,6 +26,25 @@ const getTaskOutputPath = (task: TaskState | undefined) => {
   return task?.jobs.find((job) => typeof job.outputPath === "string")?.outputPath ?? null;
 };
 
+const buildLatestTaskOutputPathByInput = (tasksById: TaskMap, taskKind: TaskKind) =>
+  Object.values(tasksById).reduce<Record<string, string>>((latestOutputByInputPath, task) => {
+    if (task.taskKind !== taskKind) {
+      return latestOutputByInputPath;
+    }
+
+    for (const job of task.jobs) {
+      if (
+        job.status === "completed" &&
+        typeof job.outputPath === "string" &&
+        job.outputPath.length > 0
+      ) {
+        latestOutputByInputPath[job.inputPath] = job.outputPath;
+      }
+    }
+
+    return latestOutputByInputPath;
+  }, {});
+
 const buildModerationResults = (
   task: TaskState | undefined,
   analysisByJobId: Record<string, AnalysisSidecar>,
@@ -47,4 +66,10 @@ const buildModerationResults = (
   return [...taskResults, ...loadedResults];
 };
 
-export { buildModerationResults, getLatestTask, getLatestTaskLogLine, getTaskOutputPath };
+export {
+  buildLatestTaskOutputPathByInput,
+  buildModerationResults,
+  getLatestTask,
+  getLatestTaskLogLine,
+  getTaskOutputPath,
+};

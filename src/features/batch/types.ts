@@ -1,7 +1,8 @@
 export type SupportedExtension = ".mp4" | ".mov";
 
 export type StartBatchRequest = {
-  inputDir: string;
+  inputDir?: string;
+  inputPaths?: string[];
   outputDirMode: "audio_replaced_default";
   allowedExtensions: SupportedExtension[];
 };
@@ -88,7 +89,7 @@ export type BatchEvent =
     };
 
 export type BatchUiState = {
-  selectedInputDir: string;
+  selectedInputPaths: string[];
   activeBatchId: string | null;
   batchesById: Record<string, BatchState>;
   workerStatus: "idle" | "starting" | "ready" | "stopped" | "error";
@@ -98,7 +99,7 @@ export type BatchUiState = {
 };
 
 export type BatchUiAction =
-  | { type: "set_selected_input_dir"; payload: string }
+  | { type: "set_selected_input_paths"; payload: string[] }
   | {
       type: "set_worker_status";
       payload: { status: BatchUiState["workerStatus"]; message: string };

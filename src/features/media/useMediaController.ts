@@ -15,6 +15,7 @@ import {
 } from "@/features/media/transport";
 import type {
   AnalysisStrategy,
+  CompressionPreset,
   CutRange,
   ModerationEngine,
   ModerationSettings,
@@ -158,9 +159,14 @@ export const useMediaController = () => {
     }
   };
 
-  const startCut = async (videoPath: string, ranges: CutRange[]) => {
+  const startCut = async (
+    videoPath: string,
+    ranges: CutRange[],
+    compressionPreset: CompressionPreset = "max_compression",
+  ) => {
     try {
       const response = await startCutJob({
+        compressionPreset,
         outputMode: "video_cleaned_default",
         ranges,
         videoPath,

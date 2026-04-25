@@ -11,7 +11,10 @@ use uuid::Uuid;
 
 use crate::{
     analytics,
-    file_discovery::{build_output_dir, collect_media_files, discover_srt_items, discover_video_items},
+    file_discovery::{
+        build_output_dir, collect_media_files, collect_media_files_from_inputs, discover_srt_items,
+        discover_video_items,
+    },
     ids::{to_file_name, to_job_id},
     protocol::WorkerCommand,
     state::AppState,
@@ -45,6 +48,16 @@ fn ensure_supported_cut_output_mode(output_mode: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn ensure_supported_compression_preset(preset: &str) -> Result<(), String> {
+    if preset != "max_compression" && preset != "balanced" {
+        return Err(
+            "Unsupported compression preset. Use max_compression or balanced.".to_string(),
+        );
+    }
+
+    Ok(())
+}
+
 fn ensure_supported_cancel_mode(mode: &str) -> Result<(), String> {
     if mode != "stop_after_current" {
         return Err("Unsupported cancellation mode. Use stop_after_current.".to_string());
@@ -61,27 +74,6 @@ fn ensure_supported_yap_mode(yap_mode: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_paths_have_extensions(paths: &[String], allowed_extensions: &[String]) -> Result<(), String> {
-    let normalized_extensions = allowed_extensions
-        .iter()
-        .map(|value| value.trim().to_ascii_lowercase())
-        .map(|value| if value.starts_with('.') { value } else { format!(".{value}") })
-        .collect::<Vec<_>>();
-
-    for path in paths {
-        let extension = Path::new(path)
-            .extension()
-            .and_then(|value| value.to_str())
-            .map(|value| format!(".{}", value.to_ascii_lowercase()))
-            .unwrap_or_default();
-        if !normalized_extensions.contains(&extension) {
-            return Err(format!("Unsupported file extension for path: {path}"));
-        }
-    }
-
-    Ok(())
-}
-
 fn resolve_input_paths(
     input_dir: Option<&str>,
     input_paths: Option<&Vec<String>>,
@@ -92,8 +84,14 @@ fn resolve_input_paths(
         if paths.is_empty() {
             return Err(empty_error.to_string());
         }
-        validate_paths_have_extensions(paths, allowed_extensions)?;
-        return Ok(paths.clone());
+        let resolved_paths = collect_media_files_from_inputs(paths, allowed_extensions)?
+            .iter()
+            .map(|path| path.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+        if resolved_paths.is_empty() {
+            return Err(empty_error.to_string());
+        }
+        return Ok(resolved_paths);
     }
 
     let directory = input_dir.ok_or_else(|| "Input directory is required.".to_string())?;
@@ -137,6 +135,22 @@ fn validate_read_text_file_path(path: &str) -> Result<PathBuf, String> {
 
     if !is_allowed_text_sidecar_path(&canonical) {
         return Err("Only .srt and .analysis.json sidecar files can be read.".to_string());
+    }
+
+    Ok(canonical)
+}
+
+fn validate_existing_file_path(path: &str) -> Result<PathBuf, String> {
+    if path.trim().is_empty() {
+        return Err("File path is required.".to_string());
+    }
+
+    let canonical = PathBuf::from(path)
+        .canonicalize()
+        .map_err(|error| format!("Failed resolving file path {path}: {error}"))?;
+
+    if !canonical.is_file() {
+        return Err(format!("Path is not a file: {}", canonical.display()));
     }
 
     Ok(canonical)
@@ -287,23 +301,21 @@ pub async fn start_batch(
     request: StartBatchRequest,
 ) -> Result<BatchStartedResponse, String> {
     ensure_supported_output_mode(&request.output_dir_mode)?;
-
-    let input_dir = Path::new(&request.input_dir);
-    let media_files = collect_media_files(input_dir, &request.allowed_extensions)?;
-
-    if media_files.is_empty() {
-        return Err("No .mp4/.mov files were found in the selected directory.".to_string());
-    }
-
-    let output_dir = build_output_dir(input_dir);
-    std::fs::create_dir_all(&output_dir)
-        .map_err(|error| format!("Failed to create output directory: {error}"))?;
-
+    let input_paths = resolve_input_paths(
+        request.input_dir.as_deref(),
+        request.input_paths.as_ref(),
+        &request.allowed_extensions,
+        "No .mp4/.mov files were selected.",
+    )?;
+    let first_input_path = input_paths
+        .first()
+        .ok_or_else(|| "No .mp4/.mov files were selected.".to_string())?;
+    let output_dir = build_output_dir(
+        Path::new(first_input_path)
+            .parent()
+            .ok_or_else(|| format!("Failed to resolve parent directory for input path: {first_input_path}"))?,
+    );
     let batch_id = Uuid::new_v4().to_string();
-    let input_paths = media_files
-        .iter()
-        .map(|path| path.to_string_lossy().to_string())
-        .collect::<Vec<_>>();
 
     state
         .insert_batch(BatchState {
@@ -449,6 +461,7 @@ pub async fn start_cut_job(
     request: StartCutJobRequest,
 ) -> Result<CutJobStartedResponse, String> {
     ensure_supported_cut_output_mode(&request.output_mode)?;
+    ensure_supported_compression_preset(&request.compression_preset)?;
     if request.ranges.is_empty() {
         return Err("Cut job requires at least one range.".to_string());
     }
@@ -473,6 +486,7 @@ pub async fn start_cut_job(
             video_path: request.video_path.clone(),
             ranges: request.ranges,
             output_mode: request.output_mode,
+            compression_preset: request.compression_preset,
         })
         .map_err(|error| format!("Failed to enqueue cut task: {error}"))?;
 
@@ -592,6 +606,14 @@ pub async fn read_text_file(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+pub async fn trash_file(path: String) -> Result<SaveAck, String> {
+    let validated_path = validate_existing_file_path(&path)?;
+    trash::delete(&validated_path)
+        .map_err(|error| format!("Failed moving file to trash {}: {error}", validated_path.display()))?;
+    Ok(SaveAck { success: true })
+}
+
+#[tauri::command]
 pub async fn open_folder_picker(app: AppHandle) -> Result<Option<String>, String> {
     let (tx, rx) = oneshot::channel::<Option<String>>();
 
@@ -613,9 +635,10 @@ pub async fn open_folder_picker(app: AppHandle) -> Result<Option<String>, String
 mod tests {
     use super::{
         create_task_jobs, default_moderation_settings, ensure_supported_cancel_mode,
-        ensure_supported_cut_output_mode, ensure_supported_output_mode, ensure_supported_yap_mode,
-        get_batch_state_inner, get_task_state_inner, require_worker_sender,
-        validate_read_text_file_path,
+        ensure_supported_compression_preset, ensure_supported_cut_output_mode,
+        ensure_supported_output_mode, ensure_supported_yap_mode,
+        get_batch_state_inner, get_task_state_inner, require_worker_sender, resolve_input_paths,
+        validate_existing_file_path, validate_read_text_file_path,
     };
     use crate::state::AppState;
     use uuid::Uuid;
@@ -630,6 +653,17 @@ mod tests {
     fn should_reject_unsupported_cut_output_mode() {
         let result = ensure_supported_cut_output_mode("custom_mode");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn should_accept_supported_compression_presets() {
+        assert!(ensure_supported_compression_preset("max_compression").is_ok());
+        assert!(ensure_supported_compression_preset("balanced").is_ok());
+    }
+
+    #[test]
+    fn should_reject_unsupported_compression_preset() {
+        assert!(ensure_supported_compression_preset("ultra").is_err());
     }
 
     #[test]
@@ -667,6 +701,20 @@ mod tests {
     }
 
     #[test]
+    fn should_validate_existing_file_paths_for_trash() {
+        let base_dir = std::env::temp_dir().join(format!("al-iyaal-trash-file-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&base_dir).unwrap();
+        let path = base_dir.join("episode.mp4");
+        std::fs::write(&path, "1").unwrap();
+
+        let validated = validate_existing_file_path(path.to_string_lossy().as_ref()).unwrap();
+
+        assert_eq!(validated, path.canonicalize().unwrap());
+
+        std::fs::remove_dir_all(base_dir).unwrap();
+    }
+
+    #[test]
     fn should_error_when_cancel_requested_without_running_worker() {
         let result = require_worker_sender(None);
         assert!(result.is_err());
@@ -698,6 +746,38 @@ mod tests {
         let jobs = create_task_jobs(&["/tmp/a.mov".to_string()]);
         assert_eq!(jobs.len(), 1);
         assert!(jobs[0].logs.is_empty());
+    }
+
+    #[test]
+    fn should_expand_remove_music_input_paths_from_files_and_folders() {
+        let base_dir = std::env::temp_dir().join(format!("al-iyaal-start-batch-{}", Uuid::new_v4()));
+        let folder = base_dir.join("folder");
+        std::fs::create_dir_all(&folder).unwrap();
+        let direct_file = base_dir.join("a.mov");
+        let folder_file = folder.join("b.mp4");
+        std::fs::write(&direct_file, "a").unwrap();
+        std::fs::write(&folder_file, "b").unwrap();
+
+        let result = resolve_input_paths(
+            None,
+            Some(&vec![
+                direct_file.to_string_lossy().to_string(),
+                folder.to_string_lossy().to_string(),
+            ]),
+            &[".mp4".to_string(), ".mov".to_string()],
+            "No .mp4/.mov files were selected.",
+        )
+        .unwrap();
+
+        assert_eq!(
+            result,
+            vec![
+                direct_file.to_string_lossy().to_string(),
+                folder_file.to_string_lossy().to_string(),
+            ]
+        );
+
+        std::fs::remove_dir_all(base_dir).unwrap();
     }
 
     #[test]

@@ -79,13 +79,14 @@ def test_should_build_transcribe_command() -> None:
     ]
 
 
-def test_should_build_ffmpeg_slice_command() -> None:
+def test_should_build_ffmpeg_slice_command_with_max_compression() -> None:
     command = build_ffmpeg_slice_command(
         ffmpeg_path="/usr/local/bin/ffmpeg",
         video_path=Path("/tmp/input.mp4"),
         output_path=Path("/tmp/slice-0.mp4"),
         start_seconds=12.5,
         duration_seconds=5.0,
+        compression_preset="max_compression",
     )
 
     assert command == [
@@ -98,11 +99,36 @@ def test_should_build_ffmpeg_slice_command() -> None:
         "-t",
         "5.0",
         "-c:v",
-        "libx264",
+        "libx265",
+        "-crf",
+        "28",
+        "-preset",
+        "slow",
+        "-tag:v",
+        "hvc1",
         "-c:a",
         "aac",
+        "-b:a",
+        "64k",
+        "-ac",
+        "1",
         "/tmp/slice-0.mp4",
     ]
+
+
+def test_should_build_ffmpeg_slice_command_with_balanced_preset() -> None:
+    command = build_ffmpeg_slice_command(
+        ffmpeg_path="/usr/local/bin/ffmpeg",
+        video_path=Path("/tmp/input.mp4"),
+        output_path=Path("/tmp/slice-0.mp4"),
+        start_seconds=0.0,
+        duration_seconds=1.0,
+        compression_preset="balanced",
+    )
+
+    assert "libx264" in command
+    assert "20" in command
+    assert "veryslow" in command
 
 
 def test_should_build_ffmpeg_concat_command() -> None:

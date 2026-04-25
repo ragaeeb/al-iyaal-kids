@@ -113,27 +113,27 @@ const SettingsPanel = () => {
   };
 
   return (
-    <div className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
+    <div className="grid gap-2 lg:grid-cols-[1.1fr_0.9fr]">
       <Card>
-        <CardHeader className="grid grid-cols-[1fr_auto] gap-4">
+        <CardHeader className="grid grid-cols-[1fr_auto] gap-2">
           <div>
-            <CardTitle className="flex items-center gap-3">
-              <span className="flex size-10 items-center justify-center rounded-2xl bg-[#f5e6dc] text-[#88322d]">
-                <KeyRound className="size-4" />
+            <CardTitle className="flex items-center gap-1.5">
+              <span className="flex size-7 items-center justify-center rounded-lg bg-[#f5e6dc] text-[#88322d]">
+                <KeyRound className="size-3.5" />
               </span>
               API Keys
             </CardTitle>
-            <p className="mt-1 text-[#8f5e56] text-sm">
-              Save provider keys for cloud subtitle analysis. Keys are stored locally in app data.
+            <p className="mt-0.5 text-[#8f5e56] text-xs">
+              API keys for cloud analysis. Saved locally.
             </p>
           </div>
           <Button type="button" size="sm" onClick={saveSettings} disabled={!settings || isSaving}>
             {isSaving ? "Saving..." : "Save"}
           </Button>
         </CardHeader>
-        <CardContent className="grid gap-4">
-          <label htmlFor="google-gemini-api-key" className="space-y-2">
-            <span className="text-[#8f5e56] text-sm">Google Gemini API Key</span>
+        <CardContent className="grid gap-2">
+          <label htmlFor="google-gemini-api-key" className="space-y-1">
+            <span className="text-[#8f5e56] text-xs">Google Gemini API Key</span>
             <Input
               id="google-gemini-api-key"
               type="password"
@@ -142,8 +142,8 @@ const SettingsPanel = () => {
               placeholder="AIza..."
             />
           </label>
-          <label htmlFor="amazon-nova-api-key" className="space-y-2">
-            <span className="text-[#8f5e56] text-sm">Amazon Nova API Key</span>
+          <label htmlFor="amazon-nova-api-key" className="space-y-1">
+            <span className="text-[#8f5e56] text-xs">Amazon Nova API Key</span>
             <Input
               id="amazon-nova-api-key"
               type="password"
@@ -158,19 +158,18 @@ const SettingsPanel = () => {
       <Card>
         <CardHeader>
           <CardTitle>Provider Notes</CardTitle>
-          <p className="mt-1 text-[#8f5e56] text-sm">
-            Engine and reasoning depth are chosen per run in the Profanity Detection screen.
+          <p className="mt-0.5 text-[#8f5e56] text-xs">
+            Engine settings are used when analysis runs from Edit Video.
           </p>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className="space-y-2">
           {errorMessage ? (
-            <p className="rounded-[18px] border border-rose-200 bg-rose-50 px-4 py-3 text-rose-700 text-sm">
+            <p className="rounded-[12px] border border-rose-200 bg-rose-50 px-2.5 py-2 text-rose-700 text-xs">
               {errorMessage}
             </p>
           ) : null}
-          <div className="rounded-[18px] border border-[#ead3c4] bg-[#fffaf6] px-4 py-3 text-[#7f524a] text-sm">
-            Use Settings only for API keys. Choose `Blacklist`, `Gemini`, or `Nova Pro`, and `Fast`
-            or `Deep`, directly in the Profanity Detection tab for each run.
+          <div className="rounded-[12px] border border-[#ead3c4] bg-[#fffaf6] px-2.5 py-2 text-[#7f524a] text-xs">
+            Use Settings for API keys and moderation provider defaults.
           </div>
         </CardContent>
       </Card>

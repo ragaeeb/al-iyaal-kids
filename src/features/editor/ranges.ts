@@ -30,7 +30,7 @@ export const buildSuggestedCutRanges = (
     .filter((segment) => selectedPriorities.includes(segment.priority))
     .sort((left, right) => byStartTime(left, right) || byPriority(left, right))
     .map((segment) => ({
-      end: toClock(segment.endTime),
+      end: toClock(segment.endTime ?? segment.startTime),
       start: toClock(segment.startTime),
     }));
 

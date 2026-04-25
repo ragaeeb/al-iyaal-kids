@@ -27,6 +27,7 @@ pub enum WorkerCommand {
         video_path: String,
         ranges: Vec<CutRange>,
         output_mode: String,
+        compression_preset: String,
     },
     CancelBatch {
         batch_id: String,
@@ -74,6 +75,8 @@ enum WorkerCommandMessage<'a> {
         ranges: &'a [CutRange],
         #[serde(rename = "outputMode")]
         output_mode: &'a str,
+        #[serde(rename = "compressionPreset")]
+        compression_preset: &'a str,
     },
     CancelBatch {
         #[serde(rename = "batchId")]
@@ -124,11 +127,13 @@ impl WorkerCommand {
                 video_path,
                 ranges,
                 output_mode,
+                compression_preset,
             } => WorkerCommandMessage::StartCutJob {
                 task_id,
                 video_path,
                 ranges,
                 output_mode,
+                compression_preset,
             },
             WorkerCommand::CancelBatch { batch_id, mode } => WorkerCommandMessage::CancelBatch {
                 batch_id,

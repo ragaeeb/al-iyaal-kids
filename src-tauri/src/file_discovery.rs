@@ -34,6 +34,46 @@ pub fn collect_media_files(input_dir: &Path, allowed_extensions: &[String]) -> R
     Ok(files)
 }
 
+pub fn collect_media_files_from_inputs(
+    input_paths: &[String],
+    allowed_extensions: &[String],
+) -> Result<Vec<PathBuf>, String> {
+    let normalized_extensions: Vec<String> = allowed_extensions
+        .iter()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .map(|value| if value.starts_with('.') { value } else { format!(".{value}") })
+        .collect();
+
+    let mut files = Vec::new();
+
+    for input_path in input_paths {
+        let path = PathBuf::from(input_path);
+        if path.is_dir() {
+            files.extend(collect_media_files(&path, allowed_extensions)?);
+            continue;
+        }
+
+        if !path.is_file() {
+            return Err(format!("Input path does not exist: {}", path.display()));
+        }
+
+        let extension = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(|value| format!(".{value}").to_ascii_lowercase())
+            .unwrap_or_default();
+        if !normalized_extensions.contains(&extension) {
+            return Err(format!("Unsupported file extension for path: {}", path.display()));
+        }
+
+        files.push(path);
+    }
+
+    files.sort();
+    files.dedup();
+    Ok(files)
+}
+
 pub fn build_output_dir(input_dir: &Path) -> PathBuf {
     input_dir.join("audio_replaced")
 }
@@ -102,13 +142,36 @@ pub fn discover_srt_items(input_dir: &Path) -> Result<Vec<SrtListItem>, String> 
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::{fs, path::Path};
 
-    use super::build_output_dir;
+    use super::{build_output_dir, collect_media_files_from_inputs};
 
     #[test]
     fn should_build_audio_replaced_output_dir() {
         let path = build_output_dir(Path::new("/tmp/example"));
         assert_eq!(path.to_string_lossy(), "/tmp/example/audio_replaced");
+    }
+
+    #[test]
+    fn should_collect_media_files_from_mixed_file_and_folder_inputs() {
+        let base_dir = std::env::temp_dir().join(format!("al-iyaal-file-discovery-{}", uuid::Uuid::new_v4()));
+        let folder = base_dir.join("folder");
+        fs::create_dir_all(&folder).unwrap();
+        let direct_file = base_dir.join("clip-a.mp4");
+        let folder_file = folder.join("clip-b.mov");
+        fs::write(&direct_file, "a").unwrap();
+        fs::write(&folder_file, "b").unwrap();
+
+        let result = collect_media_files_from_inputs(
+            &[
+                direct_file.to_string_lossy().to_string(),
+                folder.to_string_lossy().to_string(),
+            ],
+            &[".mp4".to_string(), ".mov".to_string()],
+        )
+        .unwrap();
+
+        assert_eq!(result, vec![direct_file, folder_file]);
+        fs::remove_dir_all(base_dir).unwrap();
     }
 }

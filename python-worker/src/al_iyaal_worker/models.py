@@ -36,6 +36,7 @@ class StartCutJobCommand:
     video_path: str
     ranges: list[CutRange]
     output_mode: str
+    compression_preset: str
 
 
 @dataclass(slots=True)

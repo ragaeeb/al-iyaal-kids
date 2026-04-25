@@ -25,5 +25,5 @@ const statusClassByVariant: Record<BadgeVariant, string> = {
 const isSemanticStatusVariant = (variant: BadgeVariant) =>
   variant === "completed" || variant === "failed";
 
-export { brandPalette, isSemanticStatusVariant, statusClassByVariant };
 export type { BadgeVariant, BrandPalette };
+export { brandPalette, isSemanticStatusVariant, statusClassByVariant };

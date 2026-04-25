@@ -12,7 +12,7 @@ type ModerationSettingsPanelProps = {
 };
 
 const textareaClassName =
-  "min-h-24 w-full rounded-[18px] border border-[#d9b7a5] bg-white px-4 py-3 text-sm text-[#4f1f1a] shadow-[inset_0_1px_0_rgba(255,255,255,0.7)] outline-none transition focus:border-[#88322d] focus:ring-[3px] focus:ring-[#c57267]/25";
+  "min-h-24 w-full rounded-[14px] border border-[#d9b7a5] bg-white px-3 py-2 text-xs text-[#4f1f1a] shadow-[inset_0_1px_0_rgba(255,255,255,0.7)] outline-none transition focus:border-[#88322d] focus:ring-[2px] focus:ring-[#c57267]/25";
 
 const toLines = (values: string[]) => values.join("\n");
 const fromLines = (value: string) =>
@@ -105,12 +105,10 @@ const ModerationSettingsPanel = ({ onLoad, onSave }: ModerationSettingsPanelProp
     <Card>
       <CardHeader>
         <CardTitle>Moderation Rules</CardTitle>
-        <CardDescription>
-          Edit the local-first profanity and aqeedah filtering rules used during flag batches.
-        </CardDescription>
+        <CardDescription>Edit profanity and aqeedah filtering rules.</CardDescription>
       </CardHeader>
-      <CardContent className="space-y-5">
-        <div className="space-y-2">
+      <CardContent className="space-y-3">
+        <div className="space-y-1">
           <Label htmlFor="criteria-input">Content Criteria</Label>
           <textarea
             id="criteria-input"
@@ -125,7 +123,7 @@ const ModerationSettingsPanel = ({ onLoad, onSave }: ModerationSettingsPanelProp
           />
         </div>
 
-        <div className="space-y-2">
+        <div className="space-y-1">
           <Label htmlFor="guidelines-input">Priority Guidelines</Label>
           <textarea
             id="guidelines-input"
@@ -140,8 +138,8 @@ const ModerationSettingsPanel = ({ onLoad, onSave }: ModerationSettingsPanelProp
           />
         </div>
 
-        <div className="space-y-2">
-          <Label htmlFor="profanity-input">Custom Profanity Words (one per line)</Label>
+        <div className="space-y-1">
+          <Label htmlFor="profanity-input">Custom Profanity Words</Label>
           <textarea
             id="profanity-input"
             value={toLines(settings.profanityWords)}
@@ -155,24 +153,24 @@ const ModerationSettingsPanel = ({ onLoad, onSave }: ModerationSettingsPanelProp
           />
         </div>
 
-        <div className="space-y-2">
+        <div className="space-y-1">
           <Label htmlFor="rules-json-input">Rules JSON</Label>
           <textarea
             id="rules-json-input"
             value={rulesJson}
             onChange={(event) => setRulesJson(event.currentTarget.value)}
-            className={`${textareaClassName} min-h-64 font-mono text-xs`}
+            className={`${textareaClassName} min-h-64 font-mono text-[10px]`}
           />
         </div>
 
         {errorMessage ? (
-          <p className="rounded-[18px] border border-rose-200 bg-rose-50 px-4 py-3 text-rose-700 text-sm">
+          <p className="rounded-[12px] border border-rose-200 bg-rose-50 px-2.5 py-2 text-rose-700 text-xs">
             {errorMessage}
           </p>
         ) : null}
 
-        <Button type="button" onClick={handleSave} disabled={isSaving}>
-          {isSaving ? "Saving..." : "Save Moderation Settings"}
+        <Button type="button" size="sm" onClick={handleSave} disabled={isSaving}>
+          {isSaving ? "Saving..." : "Save Settings"}
         </Button>
       </CardContent>
     </Card>

@@ -7,6 +7,6 @@ describe("navigation", () => {
     expect(defaultAppPage).toBe("dashboard");
     expect(getPageDefinition("dashboard").label).toBe("Dashboard");
     expect(getPageDefinition("analytics")?.label).toBe("Analytics");
-    expect(getPageDefinition("cut-video")?.description).toContain("cut ranges");
+    expect(getPageDefinition("cut-video")?.label).toBe("Edit Video");
   });
 });

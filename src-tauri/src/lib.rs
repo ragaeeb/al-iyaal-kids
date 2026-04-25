@@ -88,6 +88,7 @@ pub fn run() {
             commands::get_moderation_settings,
             commands::save_moderation_settings,
             commands::read_text_file,
+            commands::trash_file,
             commands::open_folder_picker,
         ])
         .run(tauri::generate_context!())

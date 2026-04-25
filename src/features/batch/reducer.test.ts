@@ -26,13 +26,13 @@ const createBatch = (): BatchState => ({
 });
 
 describe("batch reducer", () => {
-  it("should set selected input directory", () => {
+  it("should set selected input paths", () => {
     const state = batchReducer(createInitialBatchUiState(), {
-      payload: "/tmp/input",
-      type: "set_selected_input_dir",
+      payload: ["/tmp/input/a.mp4", "/tmp/input/b.mov"],
+      type: "set_selected_input_paths",
     });
 
-    expect(state.selectedInputDir).toBe("/tmp/input");
+    expect(state.selectedInputPaths).toEqual(["/tmp/input/a.mp4", "/tmp/input/b.mov"]);
   });
 
   it("should register a successful batch start", () => {

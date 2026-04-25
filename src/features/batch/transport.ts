@@ -36,6 +36,11 @@ export const cancelBatch = (request: CancelBatchRequest, invokeFn: InvokeFn = in
 export const getBatchState = (batchId: string, invokeFn: InvokeFn = invoke) =>
   invokeFn<BatchState | null>("get_batch_state", buildGetBatchStateInvokeArgs(batchId));
 
+export const trashFile = (path: string, invokeFn: InvokeFn = invoke) =>
+  invokeFn<{ success: boolean }>("trash_file", {
+    path,
+  });
+
 export const subscribeToBatchEvents = async (
   onEvent: (event: BatchEvent) => void,
   listenFn: ListenFn = listen,

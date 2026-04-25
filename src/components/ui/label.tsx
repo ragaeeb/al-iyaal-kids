@@ -7,7 +7,7 @@ type LabelProps = ComponentPropsWithoutRef<typeof LabelPrimitive.Root>;
 
 const Label = ({ className, ...props }: LabelProps) => (
   <LabelPrimitive.Root
-    className={cn("font-medium text-[#6e3933] text-sm leading-none", className)}
+    className={cn("font-medium text-[#6e3933] text-xs leading-none", className)}
     {...props}
   />
 );

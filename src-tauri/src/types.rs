@@ -3,7 +3,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StartBatchRequest {
-    pub input_dir: String,
+    pub input_dir: Option<String>,
+    pub input_paths: Option<Vec<String>>,
     pub output_dir_mode: String,
     pub allowed_extensions: Vec<String>,
 }
@@ -80,6 +81,7 @@ pub struct StartCutJobRequest {
     pub video_path: String,
     pub ranges: Vec<CutRange>,
     pub output_mode: String,
+    pub compression_preset: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

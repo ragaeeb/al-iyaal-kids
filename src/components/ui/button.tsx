@@ -6,7 +6,7 @@ import * as React from "react";
 import { cn } from "@/lib/cn";
 
 const buttonVariants = cva(
-  "inline-flex shrink-0 select-none items-center justify-center gap-2 whitespace-nowrap rounded-[18px] border font-medium text-sm outline-none transition-all disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0",
+  "inline-flex shrink-0 select-none items-center justify-center gap-1.5 whitespace-nowrap rounded-[14px] border font-medium text-xs outline-none transition-all disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0",
   {
     defaultVariants: {
       size: "default",
@@ -14,10 +14,10 @@ const buttonVariants = cva(
     },
     variants: {
       size: {
-        default: "h-10 px-3.5",
-        icon: "size-11",
-        lg: "h-12 px-5 text-base",
-        sm: "h-8 px-2.5 text-xs",
+        default: "h-8 px-3",
+        icon: "size-9",
+        lg: "h-9 px-4 text-sm",
+        sm: "h-7 px-2 text-xs",
       },
       variant: {
         danger:

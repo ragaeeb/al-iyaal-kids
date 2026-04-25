@@ -32,6 +32,7 @@ def test_should_clean_temp_artifacts_after_cut_completion(
             video_path=str(video_path),
             ranges=[CutRange(start="0:01", end="0:02")],
             output_mode="video_cleaned_default",
+            compression_preset="max_compression",
         ),
         emit=lambda payload: events.append(payload),
         should_cancel=lambda: False,

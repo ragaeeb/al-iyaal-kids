@@ -1,3 +1,4 @@
+import { open } from "@tauri-apps/plugin-dialog";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { useEffect, useReducer } from "react";
 
@@ -7,17 +8,14 @@ import {
   selectBatchProgress,
   selectSortedJobs,
 } from "@/features/batch/selectors";
-import {
-  cancelBatch,
-  openFolderPicker,
-  startBatch,
-  subscribeToBatchEvents,
-} from "@/features/batch/transport";
+import { cancelBatch, startBatch, subscribeToBatchEvents } from "@/features/batch/transport";
 import {
   buildStartBatchRequest,
   createInitialBatchState,
+  dedupePaths,
   isSupportedVideoPath,
 } from "@/features/batch/utils";
+import { listVideos } from "@/features/media/transport";
 
 export const useBatchController = () => {
   const [state, dispatch] = useReducer(batchReducer, undefined, createInitialBatchUiState);
@@ -52,26 +50,43 @@ export const useBatchController = () => {
     };
   }, []);
 
-  const setSelectedInputDir = (value: string) => {
+  const setSelectedInputPaths = (value: string[]) => {
     dispatch({
-      payload: value,
-      type: "set_selected_input_dir",
+      payload: dedupePaths(value),
+      type: "set_selected_input_paths",
     });
   };
 
-  const chooseInputDir = async () => {
-    const folder = await openFolderPicker();
+  const addInputFiles = async () => {
+    const response = await open({
+      directory: false,
+      filters: [{ extensions: ["mp4", "mov"], name: "Videos" }],
+      multiple: true,
+    });
+    const nextPaths = Array.isArray(response) ? response : response ? [response] : [];
+    setSelectedInputPaths([...state.selectedInputPaths, ...nextPaths]);
+  };
+
+  const addInputFolder = async () => {
+    const response = await open({ directory: true, multiple: false });
+    const folder = Array.isArray(response) ? response.at(0) : response;
     if (!folder) {
       return;
     }
 
-    setSelectedInputDir(folder);
+    const videos = await listVideos(folder);
+    const nextPaths = videos.map((video) => video.path);
+    setSelectedInputPaths([...state.selectedInputPaths, ...nextPaths]);
+  };
+
+  const addResolvedInputPaths = (paths: string[]) => {
+    setSelectedInputPaths([...state.selectedInputPaths, ...paths]);
   };
 
   const start = async () => {
-    if (!state.selectedInputDir) {
+    if (state.selectedInputPaths.length === 0) {
       dispatch({
-        payload: "Select a folder before starting.",
+        payload: "Select or drop at least one .mp4 or .mov file before starting.",
         type: "start_batch_error",
       });
       return;
@@ -82,7 +97,7 @@ export const useBatchController = () => {
     });
 
     try {
-      const request = buildStartBatchRequest(state.selectedInputDir);
+      const request = buildStartBatchRequest(state.selectedInputPaths);
       const response = await startBatch(request);
       const initialPaths = response.inputPaths.filter((path) => isSupportedVideoPath(path));
       dispatch({
@@ -123,8 +138,10 @@ export const useBatchController = () => {
 
   return {
     activeBatch,
+    addInputFiles,
+    addInputFolder,
+    addResolvedInputPaths,
     cancel,
-    chooseInputDir,
     clearError: () =>
       dispatch({
         type: "clear_error",
@@ -132,7 +149,7 @@ export const useBatchController = () => {
     jobs: activeBatch ? selectSortedJobs(activeBatch.jobs) : [],
     openOutput,
     progressPct: selectBatchProgress(state),
-    setSelectedInputDir,
+    setSelectedInputPaths,
     start,
     state,
   };

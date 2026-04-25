@@ -34,10 +34,10 @@ const analysisStrategyValues: AnalysisStrategy[] = ["fast", "deep"];
 const moderationEngineLabel = (engine: ModerationEngine) =>
   moderationEngineOptions.find((option) => option.value === engine)?.label ?? "Blacklist";
 
+export type { ModerationEngineOption };
 export {
   analysisStrategyValues,
   moderationEngineLabel,
   moderationEngineOptions,
   moderationEngineValues,
 };
-export type { ModerationEngineOption };

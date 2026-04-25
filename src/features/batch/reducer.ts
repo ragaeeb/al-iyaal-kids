@@ -13,7 +13,7 @@ export const createInitialBatchUiState = (): BatchUiState => ({
   batchesById: {},
   errorMessage: null,
   isStartingBatch: false,
-  selectedInputDir: "",
+  selectedInputPaths: [],
   workerMessage: "Worker has not started yet.",
   workerStatus: "idle",
 });
@@ -86,10 +86,10 @@ const applyBatchEvent = (batch: BatchState, event: BatchEvent): BatchState => {
 };
 
 export const batchReducer = (state: BatchUiState, action: BatchUiAction): BatchUiState => {
-  if (action.type === "set_selected_input_dir") {
+  if (action.type === "set_selected_input_paths") {
     return {
       ...state,
-      selectedInputDir: action.payload,
+      selectedInputPaths: action.payload,
     };
   }
 

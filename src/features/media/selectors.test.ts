@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 
 import {
+  buildLatestTaskOutputPathByInput,
   buildModerationResults,
   getLatestTask,
   getLatestTaskLogLine,
@@ -75,6 +76,74 @@ describe("media selectors", () => {
     };
 
     expect(getTaskOutputPath(task)).toBe("/tmp/out.mp4");
+  });
+
+  it("should map latest completed output paths by input path for the task kind", () => {
+    const tasksById: Record<string, TaskState> = {
+      "flag-1": {
+        jobs: [
+          {
+            fileName: "episode.srt",
+            inputPath: "/tmp/episode.srt",
+            jobId: "f1",
+            logs: [],
+            outputPath: "/tmp/episode.analysis.json",
+            progressPct: 100,
+            status: "completed",
+          },
+        ],
+        status: "completed",
+        taskId: "flag-1",
+        taskKind: "flag",
+      },
+      "trans-1": {
+        jobs: [
+          {
+            fileName: "one.mp4",
+            inputPath: "/tmp/one.mp4",
+            jobId: "t1",
+            logs: [],
+            outputPath: "/tmp/one.srt",
+            progressPct: 100,
+            status: "completed",
+          },
+          {
+            fileName: "two.mp4",
+            inputPath: "/tmp/two.mp4",
+            jobId: "t2",
+            logs: [],
+            progressPct: 20,
+            status: "running",
+          },
+        ],
+        status: "running",
+        taskId: "trans-1",
+        taskKind: "transcription",
+      },
+      "trans-2": {
+        jobs: [
+          {
+            fileName: "one.mp4",
+            inputPath: "/tmp/one.mp4",
+            jobId: "t3",
+            logs: [],
+            outputPath: "/tmp/one-v2.srt",
+            progressPct: 100,
+            status: "completed",
+          },
+        ],
+        status: "completed",
+        taskId: "trans-2",
+        taskKind: "transcription",
+      },
+    };
+
+    expect(buildLatestTaskOutputPathByInput(tasksById, "transcription")).toEqual({
+      "/tmp/one.mp4": "/tmp/one-v2.srt",
+    });
+    expect(buildLatestTaskOutputPathByInput(tasksById, "flag")).toEqual({
+      "/tmp/episode.srt": "/tmp/episode.analysis.json",
+    });
   });
 
   it("should merge task and manual moderation results without duplicates", () => {

@@ -15,7 +15,7 @@ describe("batch transport", () => {
   it("should build invoke payloads for start/cancel/get state", () => {
     const startRequest: StartBatchRequest = {
       allowedExtensions: [".mp4", ".mov"],
-      inputDir: "/tmp/in",
+      inputPaths: ["/tmp/in/a.mp4"],
       outputDirMode: "audio_replaced_default",
     };
     const cancelRequest: CancelBatchRequest = {
@@ -45,7 +45,7 @@ describe("batch transport", () => {
     await startBatch(
       {
         allowedExtensions: [".mp4", ".mov"],
-        inputDir: "/tmp/in",
+        inputPaths: ["/tmp/in/a.mp4"],
         outputDirMode: "audio_replaced_default",
       },
       invokeMock,

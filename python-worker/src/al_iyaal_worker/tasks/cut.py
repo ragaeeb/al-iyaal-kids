@@ -107,6 +107,7 @@ def process_cut_job(
                 output_path=slice_path,
                 start_seconds=start,
                 duration_seconds=duration,
+                compression_preset=command.compression_preset,
             )
             slice_result = subprocess.run(  # noqa: S603
                 slice_command,

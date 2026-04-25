@@ -191,6 +191,12 @@ async fn spawn_worker_process(
             };
 
             state_for_stdout.apply_worker_event(&parsed_event).await;
+            if let Some(frontend_event) = to_frontend_batch_event(&parsed_event) {
+                let _ = app_for_stdout.emit(BATCH_EVENT_NAME, frontend_event);
+            }
+            if let Some(task_event) = to_frontend_task_event(&parsed_event) {
+                let _ = app_for_stdout.emit(TASK_EVENT_NAME, task_event);
+            }
             match &parsed_event {
                 crate::protocol::WorkerEvent::BatchDone { batch_id, .. } => {
                     if let Some(batch) = state_for_stdout.get_batch(batch_id).await {
@@ -213,12 +219,6 @@ async fn spawn_worker_process(
                     }
                 }
                 _ => {}
-            }
-            if let Some(frontend_event) = to_frontend_batch_event(&parsed_event) {
-                let _ = app_for_stdout.emit(BATCH_EVENT_NAME, frontend_event);
-            }
-            if let Some(task_event) = to_frontend_task_event(&parsed_event) {
-                let _ = app_for_stdout.emit(TASK_EVENT_NAME, task_event);
             }
         }
     });

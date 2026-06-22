@@ -86,6 +86,13 @@ pub struct StartCutJobRequest {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ScanVideoFramesRequest {
+    pub video_path: String,
+    pub sample_interval_seconds: Option<f32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CancelTaskRequest {
     pub task_id: String,
     pub mode: String,
@@ -96,6 +103,24 @@ pub struct CancelTaskRequest {
 pub struct CutJobStartedResponse {
     pub task_id: String,
     pub video_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FrameAnalysisResponse {
+    pub output_path: String,
+    pub flagged_count: usize,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FrameScanEvent {
+    pub video_path: String,
+    pub stage: String,
+    pub message: String,
+    pub current: Option<usize>,
+    pub total: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -344,7 +369,11 @@ impl BatchEvent {
         }
     }
 
-    pub fn job_progress(batch_id: impl Into<String>, job_id: impl Into<String>, progress_pct: u8) -> Self {
+    pub fn job_progress(
+        batch_id: impl Into<String>,
+        job_id: impl Into<String>,
+        progress_pct: u8,
+    ) -> Self {
         Self::JobProgress {
             batch_id: batch_id.into(),
             job_id: job_id.into(),
@@ -352,7 +381,11 @@ impl BatchEvent {
         }
     }
 
-    pub fn job_done(batch_id: impl Into<String>, job_id: impl Into<String>, output_path: impl Into<String>) -> Self {
+    pub fn job_done(
+        batch_id: impl Into<String>,
+        job_id: impl Into<String>,
+        output_path: impl Into<String>,
+    ) -> Self {
         Self::JobDone {
             batch_id: batch_id.into(),
             job_id: job_id.into(),
@@ -360,7 +393,11 @@ impl BatchEvent {
         }
     }
 
-    pub fn job_error(batch_id: impl Into<String>, job_id: impl Into<String>, error: impl Into<String>) -> Self {
+    pub fn job_error(
+        batch_id: impl Into<String>,
+        job_id: impl Into<String>,
+        error: impl Into<String>,
+    ) -> Self {
         Self::JobError {
             batch_id: batch_id.into(),
             job_id: job_id.into(),
@@ -498,7 +535,11 @@ impl TaskEvent {
         }
     }
 
-    pub fn task_done(task_id: impl Into<String>, task_kind: TaskKind, summary: TaskSummary) -> Self {
+    pub fn task_done(
+        task_id: impl Into<String>,
+        task_kind: TaskKind,
+        summary: TaskSummary,
+    ) -> Self {
         Self::TaskDone {
             task_id: task_id.into(),
             task_kind,

@@ -8,9 +8,7 @@ use tokio::sync::{mpsc, Mutex};
 
 use crate::{
     protocol::WorkerEvent,
-    types::{
-        BatchState, BatchStatus, JobStatus, TaskJobStatus, TaskKind, TaskState, TaskStatus,
-    },
+    types::{BatchState, BatchStatus, JobStatus, TaskJobStatus, TaskKind, TaskState, TaskStatus},
 };
 
 pub type WorkerSender = mpsc::UnboundedSender<crate::protocol::WorkerCommand>;
@@ -222,8 +220,9 @@ impl AppState {
                         } else if job.status == JobStatus::Running {
                             job.status = JobStatus::Failed;
                             if job.error.is_none() {
-                                job.error =
-                                    Some("Worker ended before emitting final job state.".to_string());
+                                job.error = Some(
+                                    "Worker ended before emitting final job state.".to_string(),
+                                );
                             }
                         }
                     }
@@ -251,8 +250,9 @@ impl AppState {
                         } else if job.status == TaskJobStatus::Running {
                             job.status = TaskJobStatus::Failed;
                             if job.error.is_none() {
-                                job.error =
-                                    Some("Worker ended before emitting final job state.".to_string());
+                                job.error = Some(
+                                    "Worker ended before emitting final job state.".to_string(),
+                                );
                             }
                         }
                     }
@@ -296,8 +296,8 @@ mod tests {
     use crate::{
         protocol::WorkerEvent,
         types::{
-            BatchState, BatchStatus, JobRecord, JobStatus, TaskJobRecord, TaskJobStatus,
-            TaskState, TaskSummary,
+            BatchState, BatchStatus, JobRecord, JobStatus, TaskJobRecord, TaskJobStatus, TaskState,
+            TaskSummary,
         },
     };
 

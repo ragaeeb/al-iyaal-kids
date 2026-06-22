@@ -6,13 +6,13 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use fs2::FileExt;
-use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
 use crate::types::{
     AnalyticsSnapshot, AnalyticsTaskKind, AnalyticsTaskKindBreakdown, AnalyticsTotals,
     AnalyticsWorkRecord, BatchState, TaskKind, TaskState,
 };
+use fs2::FileExt;
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Manager};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -150,10 +150,18 @@ fn append_record(path: &Path, record: AnalyticsWorkRecord) -> Result<(), String>
         .read(true)
         .write(true)
         .open(&lock_path)
-        .map_err(|error| format!("Failed opening analytics lock {}: {error}", lock_path.display()))?;
-    lock_file
-        .lock_exclusive()
-        .map_err(|error| format!("Failed locking analytics store {}: {error}", lock_path.display()))?;
+        .map_err(|error| {
+            format!(
+                "Failed opening analytics lock {}: {error}",
+                lock_path.display()
+            )
+        })?;
+    lock_file.lock_exclusive().map_err(|error| {
+        format!(
+            "Failed locking analytics store {}: {error}",
+            lock_path.display()
+        )
+    })?;
 
     let mut store = read_store(path)?;
     store.records.push(record);
@@ -180,7 +188,10 @@ fn flagged_count_from_artifacts(value: &Option<serde_json::Value>) -> usize {
         .unwrap_or(0) as usize
 }
 
-fn create_batch_record(batch: &BatchState, started_at_epoch_seconds: Option<u64>) -> AnalyticsWorkRecord {
+fn create_batch_record(
+    batch: &BatchState,
+    started_at_epoch_seconds: Option<u64>,
+) -> AnalyticsWorkRecord {
     let summary = batch.summary.clone().unwrap_or_default();
 
     AnalyticsWorkRecord {
@@ -196,10 +207,16 @@ fn create_batch_record(batch: &BatchState, started_at_epoch_seconds: Option<u64>
     }
 }
 
-fn create_task_record(task: &TaskState, started_at_epoch_seconds: Option<u64>) -> AnalyticsWorkRecord {
+fn create_task_record(
+    task: &TaskState,
+    started_at_epoch_seconds: Option<u64>,
+) -> AnalyticsWorkRecord {
     let summary = task.summary.clone().unwrap_or_default();
     let flagged_item_count = if task.task_kind == TaskKind::Flag {
-        task.jobs.iter().map(|job| flagged_count_from_artifacts(&job.artifacts)).sum()
+        task.jobs
+            .iter()
+            .map(|job| flagged_count_from_artifacts(&job.artifacts))
+            .sum()
     } else {
         0
     };
@@ -233,7 +250,11 @@ fn task_kind_to_analytics_kind(task_kind: &TaskKind) -> AnalyticsTaskKind {
     }
 }
 
-fn breakdown_entry(task_kind: AnalyticsTaskKind, jobs: usize, label: &str) -> AnalyticsTaskKindBreakdown {
+fn breakdown_entry(
+    task_kind: AnalyticsTaskKind,
+    jobs: usize,
+    label: &str,
+) -> AnalyticsTaskKindBreakdown {
     AnalyticsTaskKindBreakdown {
         jobs,
         label: label.to_string(),
@@ -242,24 +263,31 @@ fn breakdown_entry(task_kind: AnalyticsTaskKind, jobs: usize, label: &str) -> An
 }
 
 fn snapshot_from_store(store: &AnalyticsStore) -> AnalyticsSnapshot {
-    let totals = store.records.iter().fold(AnalyticsTotals::default(), |mut totals, record| {
-        totals.cancelled_count += record.cancelled_count;
-        totals.cumulative_processing_minutes += record.processing_minutes;
-        totals.failure_count += record.failed_count;
-        totals.total_flagged_items += record.flagged_item_count;
-        totals.total_files_with_flags += record.flagged_file_count;
-        totals.success_count += record.success_count;
-        totals.total_media_processed += record.job_count;
+    let totals = store
+        .records
+        .iter()
+        .fold(AnalyticsTotals::default(), |mut totals, record| {
+            totals.cancelled_count += record.cancelled_count;
+            totals.cumulative_processing_minutes += record.processing_minutes;
+            totals.failure_count += record.failed_count;
+            totals.total_flagged_items += record.flagged_item_count;
+            totals.total_files_with_flags += record.flagged_file_count;
+            totals.success_count += record.success_count;
+            totals.total_media_processed += record.job_count;
 
-        match record.task_kind {
-            AnalyticsTaskKind::Cut => totals.total_cut_jobs += record.job_count,
-            AnalyticsTaskKind::Flag => totals.total_flag_jobs += record.job_count,
-            AnalyticsTaskKind::RemoveMusic => totals.total_remove_music_jobs += record.job_count,
-            AnalyticsTaskKind::Transcription => totals.total_transcription_jobs += record.job_count,
-        }
+            match record.task_kind {
+                AnalyticsTaskKind::Cut => totals.total_cut_jobs += record.job_count,
+                AnalyticsTaskKind::Flag => totals.total_flag_jobs += record.job_count,
+                AnalyticsTaskKind::RemoveMusic => {
+                    totals.total_remove_music_jobs += record.job_count
+                }
+                AnalyticsTaskKind::Transcription => {
+                    totals.total_transcription_jobs += record.job_count
+                }
+            }
 
-        totals
-    });
+            totals
+        });
 
     AnalyticsSnapshot {
         breakdown: vec![
@@ -273,7 +301,11 @@ fn snapshot_from_store(store: &AnalyticsStore) -> AnalyticsSnapshot {
                 totals.total_transcription_jobs,
                 "Transcriptions",
             ),
-            breakdown_entry(AnalyticsTaskKind::Flag, totals.total_flag_jobs, "Detection Runs"),
+            breakdown_entry(
+                AnalyticsTaskKind::Flag,
+                totals.total_flag_jobs,
+                "Detection Runs",
+            ),
             breakdown_entry(AnalyticsTaskKind::Cut, totals.total_cut_jobs, "Cut Exports"),
         ],
         recent_runs: store.records.len(),
@@ -401,7 +433,9 @@ mod tests {
         let handles = (0..8)
             .map(|_| {
                 let thread_path = Arc::clone(&shared_path);
-                std::thread::spawn(move || append_record(&thread_path, create_batch_record(&seed_batch(), Some(1))))
+                std::thread::spawn(move || {
+                    append_record(&thread_path, create_batch_record(&seed_batch(), Some(1)))
+                })
             })
             .collect::<Vec<_>>();
 

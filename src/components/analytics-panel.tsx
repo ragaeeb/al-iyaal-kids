@@ -162,16 +162,12 @@ const AnalyticsPanel = () => {
               ))}
             </div>
             <p className="text-[#8f5e56] text-xs">
-              Recent runs:{" "}
-              <span className="font-medium text-[#5b2722]">{snapshot.recentRuns}</span>
+              Recent runs: <span className="font-medium text-[#5b2722]">{snapshot.recentRuns}</span>
             </p>
           </div>
         </AnalyticsChartCard>
 
-        <AnalyticsChartCard
-          title="Workflow Mix"
-          description="Workflow mix from local history."
-        >
+        <AnalyticsChartCard title="Workflow Mix" description="Workflow mix from local history.">
           <div className="space-y-1.5">
             {breakdown.length === 0 ? (
               <p className="rounded-[12px] border border-[#e7d2c5] border-dashed bg-[#fff8f3] px-2.5 py-2.5 text-[#8f5e56] text-xs">
@@ -226,7 +222,13 @@ const AnalyticsPanel = () => {
           </p>
           {errorMessage ? <p className="mt-1 text-rose-700 text-xs">{errorMessage}</p> : null}
         </div>
-        <Button type="button" variant="secondary" size="sm" onClick={loadSnapshot} disabled={isLoading}>
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          onClick={loadSnapshot}
+          disabled={isLoading}
+        >
           {isLoading ? "Refreshing..." : "Refresh Analytics"}
         </Button>
       </div>

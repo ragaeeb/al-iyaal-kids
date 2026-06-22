@@ -10,11 +10,11 @@
 [![Tauri](https://img.shields.io/badge/Tauri-v2-24C8DB?logo=tauri&logoColor=white)](https://tauri.app/)
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=111111)](https://react.dev/)
 [![Tailwind](https://img.shields.io/badge/Tailwind-v4-38B2AC?logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
-[![Bun](https://img.shields.io/badge/Bun-1.3.10-F9F1E1?logo=bun&logoColor=111111)](https://bun.sh/)
-[![Biome](https://img.shields.io/badge/Biome-2.4.6-60A5FA?logo=biome&logoColor=white)](https://biomejs.dev/)
+[![Bun](https://img.shields.io/badge/Bun-1.3.12-F9F1E1?logo=bun&logoColor=111111)](https://bun.sh/)
+[![Biome](https://img.shields.io/badge/Biome-2.4.12-60A5FA?logo=biome&logoColor=white)](https://biomejs.dev/)
 [![Base UI](https://img.shields.io/badge/Base_UI-portal--safe-111111)](https://base-ui.com/)
 
-Local-first Tauri v2 desktop app (macOS-first) for Muslim families to process media privately: remove music, generate subtitles, analyze subtitle content, cut flagged segments, and track local workflow analytics.
+Local-first Tauri v2 desktop app (macOS-first) for Muslim families to remove music, generate subtitles, review flagged content, run local frame scans, export clean cuts, and track local workflow analytics. Subtitle moderation can also use opt-in cloud providers through user-supplied API keys.
 
 ## Current sections
 
@@ -25,21 +25,16 @@ Local-first Tauri v2 desktop app (macOS-first) for Muslim families to process me
   - folder-based `.mp4` / `.mov` processing
   - Demucs vocals extraction + ffmpeg remux
   - outputs to `audio_replaced/`
-- `Transcribe`
-  - one or more video files or a folder
-  - local STT via `yap`
-  - writes sibling `.srt` sidecars
-- `Profanity Detection`
-  - one or more `.srt` files or a folder
-  - per-run engine selection: `Blacklist`, `Gemini`, `Nova Pro`
-  - per-run reasoning depth: `Fast`, `Deep`
-  - can load existing sibling `.analysis.json` files
-  - writes sibling `.analysis.json` sidecars
-- `Cut Video`
-  - simple player workflow for exact range cuts
-  - subtitle-at-cursor display from sibling `.srt`
-  - flagged-sections drawer from sibling `.analysis.json`
-  - outputs to `video_cleaned/`
+- `Edit Video`
+  - single-video review surface for subtitles, subtitle analysis, local frame scans, and cut export
+  - `Subtitles` drawer can generate sibling `.srt` sidecars via local STT with `yap`
+  - `Flagged Sections` drawer can load existing sibling `.analysis.json` files or generate new ones
+  - per-run subtitle analysis engine selection: `Blacklist`, `Gemini`, `Nova Pro`
+  - per-run subtitle analysis reasoning depth: `Fast`, `Deep`
+  - `Flagged Frames` drawer runs a local frame scan and writes sibling `.frames.analysis.json` files
+  - current frame-scan POC requires Apple Silicon
+  - exact range export writes to `video_cleaned/`
+  - deleting the current video can also trash matching `.srt`, `.analysis.json`, and `.frames.analysis.json` sidecars
 - `Analytics`
   - local-only persisted workflow counters
   - tracks remove-music, transcription, detection, and cut runs
@@ -59,14 +54,16 @@ Local-first Tauri v2 desktop app (macOS-first) for Muslim families to process me
 
 Notes:
 - API keys are configured in `Settings`.
-- Engine and reasoning depth are chosen in `Profanity Detection` for each run.
-- Cancel behavior is `stop_after_current`, so an in-flight single-file LLM request will finish its current file before stopping.
+- Engine and reasoning depth are chosen in `Edit Video > Flagged Sections` for each run.
+- Frame scan is currently local-only and writes `.frames.analysis.json` sidecars.
+- Cancel behavior is `stop_after_current`, so an in-flight single-file LLM request or frame-scan subprocess will finish its current work before stopping.
 
 ## UI shell
 
 - desktop-first workspace shell
 - fixed left sidebar navigation
 - compact page-based layout, not top tabs
+- `Edit Video` consolidates subtitle generation, subtitle flag review, local frame scan review, and cut export into drawer-based workflows
 - drawer-based task/status surfaces across workflows
 - fab-ui registry setup via shadcn config
 - Base UI portal-safe root isolation via `.root { isolation: isolate; }`
@@ -79,7 +76,7 @@ Notes:
 - fab-ui via shadcn registries, built on Base UI primitives
 - Bun for package management, scripts, and tests
 - Biome for linting and formatting
-- Python worker sidecar for Demucs, ffmpeg, STT, and moderation
+- Python worker sidecar for Demucs, ffmpeg, STT, moderation, and local frame scans
 
 ## Repository layout
 
@@ -91,10 +88,11 @@ Notes:
   - `src/features/editor/` subtitles, ranges, and playback compatibility helpers
   - `src/features/moderation/` result parsing and moderation validation
   - `src/components/layout/` shell, sidebar, and analytics card primitives
-  - `src/components/` workflow pages and shared UI
-- `src-tauri/` Rust commands, worker orchestration, analytics persistence, runtime bootstrap
-- `python-worker/` Python daemon and media-processing pipeline
+  - `src/components/` workflow pages and shared UI, including the mounted `simple-cut-editor-panel.tsx`
+- `src-tauri/` Rust commands, worker orchestration, analytics persistence, runtime bootstrap, and frame-scan orchestration
+- `python-worker/` Python daemon and media-processing pipeline, including local frame scan helpers
 - `scripts/` bootstrap, check, release, and version sync helpers
+- `docs/local-frame-scan.md` current local frame-scan implementation notes
 - `.github/workflows/` CI and semantic-release pipelines
 - `PRIVACY.md` local-first privacy policy
 - `AGENTS.md` AI contributor conventions
@@ -185,6 +183,10 @@ Useful checks:
   - inspect with `ffprobe`
   - verify `convertFileSrc` path handling
   - run `src/features/editor/playback-compat.test.ts`
+- frame scan issues
+  - inspect `src-tauri/src/vision.rs`
+  - inspect `python-worker/src/al_iyaal_worker/vision_scan.py`
+  - verify sibling `.frames.analysis.json` creation
 - transcription/detection stalls
   - inspect worker lifecycle logs
   - inspect drawer task logs
@@ -198,6 +200,8 @@ Useful checks:
 - a local Python runtime is bootstrapped under app data on first run
 - runtime installs are driven from `python-worker/requirements.lock.txt`
 - analytics history persists locally under app data
+- local frame scan may install `mlx-vlm` and `torchvision` into the managed runtime on first use
+- the current local frame-scan POC requires Apple Silicon because it relies on MLX-backed captioning
 - optional env overrides:
   - `AIYAAL_PYTHON_PATH`
   - `AIYAAL_BASE_PYTHON`

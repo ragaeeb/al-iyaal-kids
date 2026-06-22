@@ -11,8 +11,9 @@ import {
   ShieldAlert,
   Trash2,
 } from "lucide-react";
-import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
-
+import type { Dispatch, RefObject, SetStateAction } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { LogOutput } from "@/components/log-output";
 import { TaskDrawer } from "@/components/task-drawer";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -20,12 +21,25 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DrawerClose } from "@/components/ui/drawer";
 import { trashFile } from "@/features/batch/transport";
 import { findSubtitleAtTime, formatTime, parseSrt } from "@/features/editor/subtitles";
+import {
+  buildVideoDeleteTargets,
+  isMissingDeleteTargetError,
+  toAnalysisSidecarPath,
+  toFrameAnalysisSidecarPath,
+  toSrtSidecarPath,
+} from "@/features/editor/video-sidecars";
+import { appendBoundedLogLine } from "@/features/media/logs";
 import { getLatestTask, getTaskOutputPath } from "@/features/media/selectors";
-import { readTextFile } from "@/features/media/transport";
+import {
+  readTextFile,
+  scanVideoFrames,
+  subscribeToFrameScanEvents,
+} from "@/features/media/transport";
 import type {
   AnalysisSidecar,
   CompressionPreset,
   CutRange,
+  FrameScanEvent,
   SubtitleEntry,
   TaskState,
 } from "@/features/media/types";
@@ -94,33 +108,20 @@ const toCutRanges = (ranges: LocalRange[]): CutRange[] => {
   }));
 };
 
-const toSrtSidecarPath = (path: string) => path.replace(/\.[^.]+$/, ".srt");
-const toAnalysisSidecarPath = (path: string) => path.replace(/\.[^.]+$/, ".analysis.json");
-
-const buildDeleteTargets = (
-  videoPath: string,
-  hasSubtitleSidecar: boolean,
-  hasAnalysisSidecar: boolean,
-) =>
-  [
-    videoPath,
-    hasSubtitleSidecar ? toSrtSidecarPath(videoPath) : null,
-    hasAnalysisSidecar ? toAnalysisSidecarPath(videoPath) : null,
-  ].filter((path): path is string => path !== null);
-
-type DeleteVideoFilesRequest = {
-  hasAnalysisSidecar: boolean;
-  hasSubtitleSidecar: boolean;
-  videoPath: string;
-};
-
-const deleteVideoFiles = async ({
-  hasAnalysisSidecar,
-  hasSubtitleSidecar,
-  videoPath,
-}: DeleteVideoFilesRequest): Promise<void> => {
-  const deleteTargets = buildDeleteTargets(videoPath, hasSubtitleSidecar, hasAnalysisSidecar);
-  const results = await Promise.allSettled(deleteTargets.map((path) => trashFile(path)));
+const deleteVideoFiles = async (videoPath: string): Promise<void> => {
+  const deleteTargets = buildVideoDeleteTargets(videoPath);
+  const results = await Promise.allSettled(
+    deleteTargets.map(async (path) => {
+      try {
+        await trashFile(path);
+      } catch (error) {
+        if (isMissingDeleteTargetError(error)) {
+          return;
+        }
+        throw error;
+      }
+    }),
+  );
   const failedCount = results.filter((result) => result.status === "rejected").length;
 
   if (failedCount > 0) {
@@ -132,18 +133,22 @@ const deleteVideoFiles = async ({
 
 const resetLoadedSidecars = (
   setAnalysisSidecar: (value: AnalysisSidecar | null) => void,
+  setFrameAnalysisSidecar: (value: AnalysisSidecar | null) => void,
   setHasSubtitleSidecar: (value: boolean) => void,
   setSubtitles: (value: SubtitleEntry[]) => void,
 ) => {
   setSubtitles([]);
   setHasSubtitleSidecar(false);
   setAnalysisSidecar(null);
+  setFrameAnalysisSidecar(null);
 };
 
 const applyLoadedSidecars = (
   analysisResult: PromiseSettledResult<string>,
+  frameAnalysisResult: PromiseSettledResult<string>,
   subtitleResult: PromiseSettledResult<string>,
   setAnalysisSidecar: (value: AnalysisSidecar | null) => void,
+  setFrameAnalysisSidecar: (value: AnalysisSidecar | null) => void,
   setHasSubtitleSidecar: (value: boolean) => void,
   setSubtitles: (value: SubtitleEntry[]) => void,
 ) => {
@@ -166,10 +171,19 @@ const applyLoadedSidecars = (
     } catch {
       setAnalysisSidecar(null);
     }
-    return;
+  } else {
+    setAnalysisSidecar(null);
   }
 
-  setAnalysisSidecar(null);
+  if (frameAnalysisResult.status === "fulfilled") {
+    try {
+      setFrameAnalysisSidecar(parseAnalysisSidecar(frameAnalysisResult.value));
+    } catch {
+      setFrameAnalysisSidecar(null);
+    }
+  } else {
+    setFrameAnalysisSidecar(null);
+  }
 };
 
 const clampSeekTime = (time: number, duration: number) => {
@@ -192,8 +206,8 @@ const DeleteVideoConfirmationCard = ({
   <div className="rounded-[20px] border border-rose-300 bg-rose-50 px-4 py-3 text-rose-900 text-sm">
     <p className="font-medium">Delete the current video and its sidecars?</p>
     <p className="mt-1 text-rose-800 text-xs">
-      This moves the selected video to trash, plus the matching `.srt` and `.analysis.json` files
-      when present.
+      This moves the selected video to trash, plus the matching `.srt`, `.analysis.json`, and
+      `.frames.analysis.json` files when present.
     </p>
     <div className="mt-3 flex flex-wrap gap-2">
       <Button type="button" variant="danger" size="sm" onClick={onConfirm}>
@@ -256,6 +270,19 @@ type FlaggedSectionsDrawerContentProps = {
   onSeek: (time: number) => void;
 };
 
+type FlaggedFramesDrawerContentProps = {
+  frameAnalysisError: string | null;
+  frameAnalysisLogs: string[];
+  frameAnalysisStatusMessage: string | null;
+  frameAnalysisSidecar: AnalysisSidecar | null;
+  canAnalyze: boolean;
+  filter: FlaggedSectionsFilter;
+  isAnalyzingFrames: boolean;
+  onFilterChange: (value: FlaggedSectionsFilter) => void;
+  onStartAnalysis: () => void;
+  onSeek: (time: number) => void;
+};
+
 type SubtitlesDrawerContentProps = {
   canTranscribe: boolean;
   onSeek: (time: number) => void;
@@ -305,6 +332,352 @@ const formatFlaggedSegmentTimeLabel = (segment: AnalysisSidecar["flagged"][numbe
   }
 
   return formatTime(segment.startTime);
+};
+
+const getObjectMessage = (error: object) =>
+  "message" in error && typeof error.message === "string" ? error.message : null;
+
+const serializeUnknownError = (error: object) => {
+  try {
+    const serialized = JSON.stringify(error);
+    return serialized && serialized !== "{}" ? serialized : null;
+  } catch {
+    return null;
+  }
+};
+
+const toUnknownErrorMessage = (error: unknown, fallback: string) => {
+  if (typeof error === "string" && error.trim().length > 0) {
+    return error;
+  }
+
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message;
+  }
+
+  if (error && typeof error === "object") {
+    const candidateMessage = getObjectMessage(error);
+    if (candidateMessage && candidateMessage.trim().length > 0) {
+      return candidateMessage;
+    }
+
+    return serializeUnknownError(error) ?? fallback;
+  }
+
+  return fallback;
+};
+
+const appendLocalLog = (logs: string[], message: string) =>
+  appendBoundedLogLine(logs, `[${new Date().toLocaleTimeString()}] ${message}`);
+
+const formatFrameScanStatusMessage = (event: FrameScanEvent) =>
+  typeof event.current === "number" && typeof event.total === "number"
+    ? `${event.message} (${event.current}/${event.total})`
+    : event.message;
+
+const resolveActiveFrameScanPath = (
+  activeFrameScanVideoPath: string | null,
+  videoPath: string | null,
+) => activeFrameScanVideoPath ?? videoPath;
+
+const shouldHandleFrameScanEvent = (
+  event: FrameScanEvent,
+  activeFrameScanVideoPath: string | null,
+  videoPath: string | null,
+) => {
+  const expectedVideoPath = resolveActiveFrameScanPath(activeFrameScanVideoPath, videoPath);
+  return Boolean(expectedVideoPath && event.videoPath === expectedVideoPath);
+};
+
+const loadSidecarContent = (videoPath: string) =>
+  Promise.allSettled([
+    readTextFile(toSrtSidecarPath(videoPath)),
+    readTextFile(toAnalysisSidecarPath(videoPath)),
+    readTextFile(toFrameAnalysisSidecarPath(videoPath)),
+  ]);
+
+const resolveDroppedVideoPath = (
+  event: { payload: DragDropEvent },
+  dropTargetRef: RefObject<HTMLDivElement | null>,
+) => {
+  if (!("position" in event.payload)) {
+    return null;
+  }
+
+  if (!isWithinDropTarget(dropTargetRef, event.payload.position)) {
+    return null;
+  }
+
+  if (!("paths" in event.payload)) {
+    return null;
+  }
+
+  return (
+    event.payload.paths
+      .map((path: string) => normalizeDialogPath(path))
+      .find((path: string) => isSupportedCutVideoPath(path)) ?? null
+  );
+};
+
+const FrameScanStatusBanners = ({
+  frameAnalysisError,
+  frameAnalysisStatusMessage,
+  isAnalyzingFrames,
+}: Pick<
+  FlaggedFramesDrawerContentProps,
+  "frameAnalysisError" | "frameAnalysisStatusMessage" | "isAnalyzingFrames"
+>) => (
+  <>
+    {frameAnalysisError ? (
+      <p className="rounded-[12px] border border-rose-200 bg-rose-50 px-2.5 py-2 text-rose-900 text-xs">
+        {frameAnalysisError}
+      </p>
+    ) : null}
+    {isAnalyzingFrames && frameAnalysisStatusMessage ? (
+      <p className="rounded-[12px] border border-[#ead3c4] bg-[#fffaf6] px-2.5 py-2 text-[#5b2722] text-xs">
+        {frameAnalysisStatusMessage}
+      </p>
+    ) : null}
+  </>
+);
+
+const FrameScanActionButton = ({
+  canAnalyze,
+  idleLabel,
+  isAnalyzingFrames,
+  onStartAnalysis,
+}: {
+  canAnalyze: boolean;
+  idleLabel: string;
+  isAnalyzingFrames: boolean;
+  onStartAnalysis: () => void;
+}) => (
+  <Button
+    type="button"
+    size="sm"
+    onClick={onStartAnalysis}
+    disabled={!canAnalyze || isAnalyzingFrames}
+  >
+    {isAnalyzingFrames ? (
+      <LoaderCircle className="size-3 animate-spin" />
+    ) : (
+      <ShieldAlert className="size-3" />
+    )}
+    {isAnalyzingFrames ? "Scanning Frames..." : idleLabel}
+  </Button>
+);
+
+const useVideoSidecarLoading = (
+  sidecarRefreshKey: number,
+  videoPath: string | null,
+  setAnalysisSidecar: (value: AnalysisSidecar | null) => void,
+  setFrameAnalysisSidecar: (value: AnalysisSidecar | null) => void,
+  setHasSubtitleSidecar: (value: boolean) => void,
+  setSubtitles: (value: SubtitleEntry[]) => void,
+) => {
+  useEffect(() => {
+    let cancelled = false;
+
+    if (sidecarRefreshKey < 0) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (!videoPath) {
+      resetLoadedSidecars(
+        setAnalysisSidecar,
+        setFrameAnalysisSidecar,
+        setHasSubtitleSidecar,
+        setSubtitles,
+      );
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const load = async () => {
+      const [subtitleContent, analysisContent, frameAnalysisContent] =
+        await loadSidecarContent(videoPath);
+
+      if (cancelled) {
+        return;
+      }
+
+      applyLoadedSidecars(
+        analysisContent,
+        frameAnalysisContent,
+        subtitleContent,
+        setAnalysisSidecar,
+        setFrameAnalysisSidecar,
+        setHasSubtitleSidecar,
+        setSubtitles,
+      );
+    };
+
+    load().catch(() => {
+      if (cancelled) {
+        return;
+      }
+
+      resetLoadedSidecars(
+        setAnalysisSidecar,
+        setFrameAnalysisSidecar,
+        setHasSubtitleSidecar,
+        setSubtitles,
+      );
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    sidecarRefreshKey,
+    videoPath,
+    setAnalysisSidecar,
+    setFrameAnalysisSidecar,
+    setHasSubtitleSidecar,
+    setSubtitles,
+  ]);
+};
+
+const useFrameScanEventSubscription = (
+  activeFrameScanVideoPath: string | null,
+  isActive: boolean,
+  videoPath: string | null,
+  setFrameAnalysisError: (value: string | null) => void,
+  setFrameAnalysisLogs: Dispatch<SetStateAction<string[]>>,
+  setFrameAnalysisStatusMessage: (value: string | null) => void,
+  setIsAnalyzingFrames: (value: boolean) => void,
+  setSidecarRefreshKey: Dispatch<SetStateAction<number>>,
+) => {
+  useEffect(() => {
+    if (!isActive) {
+      return;
+    }
+
+    let mounted = true;
+    let unlisten: (() => void) | null = null;
+
+    const handleFrameScanEvent = (event: FrameScanEvent) => {
+      if (!mounted || !shouldHandleFrameScanEvent(event, activeFrameScanVideoPath, videoPath)) {
+        return;
+      }
+
+      const message = formatFrameScanStatusMessage(event);
+      setFrameAnalysisStatusMessage(message);
+      setFrameAnalysisLogs((previous) => appendLocalLog(previous, message));
+
+      if (event.stage === "completed") {
+        setIsAnalyzingFrames(false);
+        setSidecarRefreshKey((previous) => previous + 1);
+        return;
+      }
+
+      if (event.stage === "failed") {
+        setFrameAnalysisError(event.message);
+        setIsAnalyzingFrames(false);
+      }
+    };
+
+    const setup = async () => {
+      unlisten = await subscribeToFrameScanEvents(handleFrameScanEvent);
+    };
+
+    setup().catch(() => undefined);
+
+    return () => {
+      mounted = false;
+      unlisten?.();
+    };
+  }, [
+    activeFrameScanVideoPath,
+    isActive,
+    setFrameAnalysisError,
+    setFrameAnalysisLogs,
+    setFrameAnalysisStatusMessage,
+    setIsAnalyzingFrames,
+    setSidecarRefreshKey,
+    videoPath,
+  ]);
+};
+
+const useSelectedVideoSync = (
+  applySelectedVideoPath: (selected: string | null, shouldSyncController?: boolean) => void,
+  isActive: boolean,
+  requestedVideoPath: string | null,
+  videoPath: string | null,
+  setIsDropTargetActive: (value: boolean) => void,
+) => {
+  useEffect(() => {
+    if (!isActive) {
+      setIsDropTargetActive(false);
+      return;
+    }
+
+    if (!requestedVideoPath || requestedVideoPath === videoPath) {
+      return;
+    }
+
+    applySelectedVideoPath(requestedVideoPath, false);
+  }, [applySelectedVideoPath, isActive, requestedVideoPath, setIsDropTargetActive, videoPath]);
+};
+
+const useVideoDropTarget = (
+  applySelectedVideoPath: (selected: string | null, shouldSyncController?: boolean) => void,
+  dropTargetRef: RefObject<HTMLDivElement | null>,
+  isActive: boolean,
+  setIsDropTargetActive: (value: boolean) => void,
+) => {
+  useEffect(() => {
+    if (!isActive) {
+      setIsDropTargetActive(false);
+      return;
+    }
+
+    let mounted = true;
+    let cleanup: (() => void) | undefined;
+
+    const handleDragDropEvent = async (event: { payload: DragDropEvent }) => {
+      if (!mounted) {
+        return;
+      }
+
+      switch (event.payload.type) {
+        case "leave":
+          setIsDropTargetActive(false);
+          return;
+        case "over":
+        case "enter":
+          setIsDropTargetActive(isWithinDropTarget(dropTargetRef, event.payload.position));
+          return;
+        default: {
+          setIsDropTargetActive(false);
+          const droppedPath = resolveDroppedVideoPath(event, dropTargetRef);
+          if (!droppedPath) {
+            return;
+          }
+
+          applySelectedVideoPath(droppedPath);
+        }
+      }
+    };
+
+    const setup = async () => {
+      cleanup = await getCurrentWindow().onDragDropEvent((event) => {
+        void handleDragDropEvent(event);
+      });
+    };
+
+    setup().catch(() => {
+      setIsDropTargetActive(false);
+    });
+
+    return () => {
+      mounted = false;
+      cleanup?.();
+    };
+  }, [applySelectedVideoPath, dropTargetRef, isActive, setIsDropTargetActive]);
 };
 
 const FlaggedSectionsDrawerContent = ({
@@ -388,6 +761,135 @@ const FlaggedSectionsDrawerContent = ({
       ) : filteredSegments.length === 0 ? (
         <p className="rounded-[12px] border border-[#e7d2c5] border-dashed bg-[#fff8f3] px-2.5 py-2.5 text-[#8f5e56] text-xs">
           No flagged sections match the selected filter.
+        </p>
+      ) : (
+        filteredSegments.map((segment) => (
+          <button
+            key={`${segment.startTime}-${segment.endTime}-${segment.ruleId}`}
+            type="button"
+            onClick={() => onSeek(segment.startTime)}
+            className="w-full rounded-[12px] border border-[#ead3c4] bg-[#fffaf7] px-2 py-1.5 text-left transition hover:border-[#c57267] hover:bg-white"
+          >
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Badge
+                variant={
+                  segment.priority === "high"
+                    ? "failed"
+                    : segment.priority === "medium"
+                      ? "running"
+                      : "queued"
+                }
+              >
+                {segment.priority}
+              </Badge>
+              <span className="font-mono text-[#7f524a] text-xs">
+                {formatFlaggedSegmentTimeLabel(segment)}
+              </span>
+            </div>
+            <p className="mt-1 font-medium text-[#5b2722] text-xs">{segment.reason}</p>
+            <p className="mt-0.5 text-[#7f524a] text-xs">{segment.text}</p>
+          </button>
+        ))
+      )}
+    </div>
+  );
+};
+
+const FlaggedFramesDrawerContent = ({
+  frameAnalysisError,
+  frameAnalysisLogs,
+  frameAnalysisStatusMessage,
+  frameAnalysisSidecar,
+  canAnalyze,
+  filter,
+  isAnalyzingFrames,
+  onFilterChange,
+  onStartAnalysis,
+  onSeek,
+}: FlaggedFramesDrawerContentProps) => {
+  if (!frameAnalysisSidecar) {
+    return (
+      <div className="space-y-1.5">
+        <p className="rounded-[12px] border border-[#e7d2c5] border-dashed bg-[#fff8f3] px-2.5 py-2.5 text-[#8f5e56] text-xs">
+          Frame scan has not been run for this video.
+        </p>
+        <FrameScanStatusBanners
+          frameAnalysisError={frameAnalysisError}
+          frameAnalysisStatusMessage={frameAnalysisStatusMessage}
+          isAnalyzingFrames={isAnalyzingFrames}
+        />
+        <FrameScanActionButton
+          canAnalyze={canAnalyze}
+          idleLabel="Run Frame Scan"
+          isAnalyzingFrames={isAnalyzingFrames}
+          onStartAnalysis={onStartAnalysis}
+        />
+        <LogOutput logs={frameAnalysisLogs} />
+      </div>
+    );
+  }
+
+  const flaggedCounts = buildFlaggedPriorityCounts(frameAnalysisSidecar.flagged);
+  const filteredSegments = filterFlaggedSegments(frameAnalysisSidecar.flagged, filter);
+
+  return (
+    <div className="space-y-1.5">
+      <FrameScanStatusBanners
+        frameAnalysisError={frameAnalysisError}
+        frameAnalysisStatusMessage={frameAnalysisStatusMessage}
+        isAnalyzingFrames={isAnalyzingFrames}
+      />
+      <div className="rounded-[14px] border border-[#ead3c4] bg-[#fffaf6] px-2.5 py-2">
+        <div className="flex items-start justify-between gap-2">
+          <div className="space-y-0.5">
+            <p className="text-[#8f5e56] text-xs">Summary</p>
+            <p className="text-[#5b2722] text-xs">{frameAnalysisSidecar.summary}</p>
+          </div>
+          <Badge variant="queued">Local POC</Badge>
+        </div>
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          <Badge variant="failed">High {flaggedCounts.high}</Badge>
+          <Badge variant="running">Medium {flaggedCounts.medium}</Badge>
+          <Badge variant="queued">Low {flaggedCounts.low}</Badge>
+          <Badge variant="queued">Total {frameAnalysisSidecar.flagged.length}</Badge>
+        </div>
+      </div>
+      <div className="flex items-center justify-between gap-2 rounded-[12px] border border-[#ead3c4] bg-[#fffaf6] px-2.5 py-2">
+        <div>
+          <p className="text-[#8f5e56] text-xs">Filter</p>
+          <p className="mt-0.5 text-[#5b2722] text-xs">
+            {filteredSegments.length} of {frameAnalysisSidecar.flagged.length} frame
+            {frameAnalysisSidecar.flagged.length === 1 ? "" : "s"}
+          </p>
+        </div>
+        <select
+          value={filter}
+          onChange={(event) => onFilterChange(event.currentTarget.value as FlaggedSectionsFilter)}
+          className="h-9 rounded-[14px] border border-[#d9b7a5] bg-white px-3 text-[#4f1f1a] text-xs outline-none transition focus:border-[#88322d] focus:ring-[#c57267]/25 focus:ring-[2px]"
+        >
+          {flaggedSectionsFilterOptions.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="flex gap-2">
+        <FrameScanActionButton
+          canAnalyze={canAnalyze}
+          idleLabel="Run Again"
+          isAnalyzingFrames={isAnalyzingFrames}
+          onStartAnalysis={onStartAnalysis}
+        />
+      </div>
+      <LogOutput logs={frameAnalysisLogs} />
+      {frameAnalysisSidecar.flagged.length === 0 ? (
+        <p className="rounded-[12px] border border-[#e7d2c5] border-dashed bg-[#fff8f3] px-2.5 py-2.5 text-[#8f5e56] text-xs">
+          Frame scan exists, but no flagged frames were found.
+        </p>
+      ) : filteredSegments.length === 0 ? (
+        <p className="rounded-[12px] border border-[#e7d2c5] border-dashed bg-[#fff8f3] px-2.5 py-2.5 text-[#8f5e56] text-xs">
+          No flagged frames match the selected filter.
         </p>
       ) : (
         filteredSegments.map((segment) => (
@@ -712,6 +1214,7 @@ const RangesDrawerContent = ({
   </div>
 );
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: this coordinator still owns several drawer actions, but the sidecar/frame-scan state transitions now live in extracted helpers and hooks.
 const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProps) => {
   const [videoPath, setVideoPath] = useState<string | null>(null);
   const [selectedVideoPath, setSelectedVideoPath] = useState<string | null>(null);
@@ -736,6 +1239,13 @@ const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProp
   const [subtitles, setSubtitles] = useState<SubtitleEntry[]>([]);
   const [hasSubtitleSidecar, setHasSubtitleSidecar] = useState(false);
   const [analysisSidecar, setAnalysisSidecar] = useState<AnalysisSidecar | null>(null);
+  const [frameAnalysisSidecar, setFrameAnalysisSidecar] = useState<AnalysisSidecar | null>(null);
+  const [frameAnalysisError, setFrameAnalysisError] = useState<string | null>(null);
+  const [frameAnalysisLogs, setFrameAnalysisLogs] = useState<string[]>([]);
+  const [frameAnalysisStatusMessage, setFrameAnalysisStatusMessage] = useState<string | null>(null);
+  const [isAnalyzingFrames, setIsAnalyzingFrames] = useState(false);
+  const [activeFrameScanVideoPath, setActiveFrameScanVideoPath] = useState<string | null>(null);
+  const [flaggedFramesFilter, setFlaggedFramesFilter] = useState<FlaggedSectionsFilter>("all");
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const dropTargetRef = useRef<HTMLDivElement>(null);
 
@@ -755,8 +1265,6 @@ const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProp
     markerEnd ?? currentTime,
     Number.isFinite(duration) && duration > 0 ? duration : currentTime,
   )}`;
-  const hasSubtitleSidecarLoaded = hasSubtitleSidecar && videoPath !== null;
-  const hasAnalysisSidecarLoaded = analysisSidecar !== null;
   const srtSidecarPath = videoPath ? toSrtSidecarPath(videoPath) : null;
   const sidecarTaskRefreshSignature = [
     transcriptionTask?.status,
@@ -786,6 +1294,11 @@ const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProp
       setIsDeleteConfirmOpen(false);
       setIsShowingExportOutput(false);
       setDeleteError(null);
+      setFrameAnalysisError(null);
+      setFrameAnalysisLogs([]);
+      setFrameAnalysisStatusMessage(null);
+      setActiveFrameScanVideoPath(null);
+      setIsAnalyzingFrames(false);
       if (videoRef.current) {
         videoRef.current.load();
       }
@@ -815,51 +1328,14 @@ const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProp
     setDeleteError(null);
   }, [cutOutputPath, cutTask?.jobs, cutTask?.status, selectedVideoPath]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const refreshKey = sidecarRefreshKey;
-
-    const loadSidecars = async () => {
-      if (refreshKey < 0) {
-        return;
-      }
-
-      if (!videoPath) {
-        resetLoadedSidecars(setAnalysisSidecar, setHasSubtitleSidecar, setSubtitles);
-        return;
-      }
-
-      try {
-        const [subtitleContent, analysisContent] = await Promise.allSettled([
-          readTextFile(toSrtSidecarPath(videoPath)),
-          readTextFile(toAnalysisSidecarPath(videoPath)),
-        ]);
-
-        if (cancelled) {
-          return;
-        }
-
-        applyLoadedSidecars(
-          analysisContent,
-          subtitleContent,
-          setAnalysisSidecar,
-          setHasSubtitleSidecar,
-          setSubtitles,
-        );
-      } catch {
-        if (cancelled) {
-          return;
-        }
-        resetLoadedSidecars(setAnalysisSidecar, setHasSubtitleSidecar, setSubtitles);
-      }
-    };
-
-    loadSidecars().catch(() => undefined);
-
-    return () => {
-      cancelled = true;
-    };
-  }, [sidecarRefreshKey, videoPath]);
+  useVideoSidecarLoading(
+    sidecarRefreshKey,
+    videoPath,
+    setAnalysisSidecar,
+    setFrameAnalysisSidecar,
+    setHasSubtitleSidecar,
+    setSubtitles,
+  );
 
   useEffect(() => {
     if (!sidecarTaskRefreshSignature) {
@@ -870,79 +1346,41 @@ const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProp
   }, [sidecarTaskRefreshSignature]);
 
   useEffect(() => {
-    if (!isActive) {
-      setIsDropTargetActive(false);
+    if (!isAnalyzingFrames) {
       return;
     }
 
-    const requestedVideoPath = controller.state.selectedVideoPath;
-    if (!requestedVideoPath || requestedVideoPath === videoPath) {
+    if (!frameAnalysisSidecar) {
       return;
     }
 
-    applySelectedVideoPath(requestedVideoPath, false);
-  }, [applySelectedVideoPath, controller.state.selectedVideoPath, isActive, videoPath]);
+    setFrameAnalysisLogs((previous) =>
+      appendLocalLog(previous, "Frame scan results loaded into the drawer."),
+    );
+    setFrameAnalysisStatusMessage("Frame scan results loaded.");
+    setIsAnalyzingFrames(false);
+  }, [frameAnalysisSidecar, isAnalyzingFrames]);
 
-  useEffect(() => {
-    if (!isActive) {
-      setIsDropTargetActive(false);
-      return;
-    }
+  useFrameScanEventSubscription(
+    activeFrameScanVideoPath,
+    isActive,
+    videoPath,
+    setFrameAnalysisError,
+    setFrameAnalysisLogs,
+    setFrameAnalysisStatusMessage,
+    setIsAnalyzingFrames,
+    setSidecarRefreshKey,
+  );
 
-    let mounted = true;
+  useSelectedVideoSync(
+    applySelectedVideoPath,
+    isActive,
+    controller.state.selectedVideoPath,
+    videoPath,
+    setIsDropTargetActive,
+  );
 
-    const handleDragDropEvent = async (event: { payload: DragDropEvent }) => {
-      if (!mounted) {
-        return;
-      }
-
-      if (event.payload.type === "leave") {
-        setIsDropTargetActive(false);
-        return;
-      }
-
-      if (event.payload.type === "over" || event.payload.type === "enter") {
-        setIsDropTargetActive(isWithinDropTarget(dropTargetRef, event.payload.position));
-        return;
-      }
-
-      const droppedInsideTarget = isWithinDropTarget(dropTargetRef, event.payload.position);
-      setIsDropTargetActive(false);
-      if (!droppedInsideTarget) {
-        return;
-      }
-
-      const droppedPath = event.payload.paths
-        .map((path) => normalizeDialogPath(path))
-        .find((path) => isSupportedCutVideoPath(path));
-      if (!droppedPath) {
-        return;
-      }
-
-      applySelectedVideoPath(droppedPath);
-    };
-
-    let cleanup: (() => void) | undefined;
-    const setup = async () => {
-      const unlisten = await getCurrentWindow().onDragDropEvent((event) => {
-        void handleDragDropEvent(event);
-      });
-      return unlisten;
-    };
-
-    setup()
-      .then((unlisten) => {
-        cleanup = unlisten;
-      })
-      .catch(() => {
-        setIsDropTargetActive(false);
-      });
-
-    return () => {
-      mounted = false;
-      cleanup?.();
-    };
-  }, [applySelectedVideoPath, isActive]);
+  useVideoDropTarget(applySelectedVideoPath, dropTargetRef, isActive, setIsDropTargetActive);
 
   const chooseVideo = async () => {
     const response = await open({
@@ -1040,6 +1478,33 @@ const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProp
     await controller.startFlaggingForPaths([srtSidecarPath]);
   };
 
+  const startFlaggedFrameAnalysis = async () => {
+    if (!videoPath) {
+      return;
+    }
+
+    setFrameAnalysisError(null);
+    setFrameAnalysisLogs([]);
+    setFrameAnalysisStatusMessage("Requesting local frame scan...");
+    setActiveFrameScanVideoPath(videoPath);
+    setIsAnalyzingFrames(true);
+
+    try {
+      await scanVideoFrames({
+        sampleIntervalSeconds: 2,
+        videoPath,
+      });
+      setFrameAnalysisError(null);
+    } catch (error) {
+      const message = toUnknownErrorMessage(error, "Failed running local frame scan.");
+      setFrameAnalysisError(message);
+      setFrameAnalysisLogs((previous) => appendLocalLog(previous, `Scan failed: ${message}`));
+      setFrameAnalysisStatusMessage(message);
+    } finally {
+      setIsAnalyzingFrames(false);
+    }
+  };
+
   const togglePlayback = () => {
     if (!videoRef.current) {
       return;
@@ -1088,27 +1553,14 @@ const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProp
     setIsDeletingVideo(true);
 
     try {
-      await deleteVideoFiles({
-        hasAnalysisSidecar: hasAnalysisSidecarLoaded,
-        hasSubtitleSidecar: hasSubtitleSidecarLoaded,
-        videoPath,
-      });
-
-      setVideoPath(null);
-      setSelectedVideoPath(null);
-      controller.selectVideo(null);
-      setRanges([]);
-      setMarkerStart(null);
-      setMarkerEnd(null);
-      setPlaybackError(null);
-      setCurrentTime(0);
-      setDuration(0);
-      setIsPlaying(false);
-      setHoverSeekTime(null);
-      setHoverSeekPosition(null);
-      setIsShowingExportOutput(false);
-      setIsDeleteConfirmOpen(false);
-      resetLoadedSidecars(setAnalysisSidecar, setHasSubtitleSidecar, setSubtitles);
+      await deleteVideoFiles(videoPath);
+      applySelectedVideoPath(null);
+      resetLoadedSidecars(
+        setAnalysisSidecar,
+        setFrameAnalysisSidecar,
+        setHasSubtitleSidecar,
+        setSubtitles,
+      );
     } catch (error) {
       setDeleteError(
         error instanceof Error ? error.message : "Failed deleting the selected files.",
@@ -1178,6 +1630,30 @@ const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProp
             flagTask={flagTask}
             onFilterChange={setFlaggedSectionsFilter}
             onStartAnalysis={startFlaggedSectionAnalysis}
+            onSeek={(time) => {
+              if (!videoRef.current) {
+                return;
+              }
+              videoRef.current.currentTime = time;
+              setCurrentTime(time);
+            }}
+          />
+        </TaskDrawer>
+        <TaskDrawer
+          triggerLabel="Flagged Frames"
+          title="Flagged Frames"
+          description="Local frame scan detections for the current video."
+        >
+          <FlaggedFramesDrawerContent
+            frameAnalysisError={frameAnalysisError}
+            frameAnalysisLogs={frameAnalysisLogs}
+            frameAnalysisStatusMessage={frameAnalysisStatusMessage}
+            frameAnalysisSidecar={frameAnalysisSidecar}
+            canAnalyze={videoPath !== null}
+            filter={flaggedFramesFilter}
+            isAnalyzingFrames={isAnalyzingFrames}
+            onFilterChange={setFlaggedFramesFilter}
+            onStartAnalysis={startFlaggedFrameAnalysis}
             onSeek={(time) => {
               if (!videoRef.current) {
                 return;

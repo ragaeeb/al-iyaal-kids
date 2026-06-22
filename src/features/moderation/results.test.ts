@@ -71,7 +71,7 @@ describe("moderation results", () => {
             startTime: 12,
           },
         ],
-        models: ["gemini-3-flash-preview"],
+        models: ["gemini-3.5-flash"],
         strategy: "fast",
         summary: "Flagged 1 subtitle item(s).",
         timestamp: "2026-01-13T18:14:11.018Z",

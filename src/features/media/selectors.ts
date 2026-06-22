@@ -1,4 +1,4 @@
-import type { AnalysisSidecar, TaskKind, TaskState } from "@/features/media/types";
+import type { AnalysisSidecar, TaskJobRecord, TaskKind, TaskState } from "@/features/media/types";
 import type { ModerationJobResult } from "@/features/moderation/results";
 
 type TaskMap = Record<string, TaskState>;
@@ -45,6 +45,19 @@ const buildLatestTaskOutputPathByInput = (tasksById: TaskMap, taskKind: TaskKind
     return latestOutputByInputPath;
   }, {});
 
+const buildLatestTaskJobByInput = (tasksById: TaskMap, taskKind: TaskKind) =>
+  Object.values(tasksById).reduce<Record<string, TaskJobRecord>>((latestJobByInputPath, task) => {
+    if (task.taskKind !== taskKind) {
+      return latestJobByInputPath;
+    }
+
+    for (const job of task.jobs) {
+      latestJobByInputPath[job.inputPath] = job;
+    }
+
+    return latestJobByInputPath;
+  }, {});
+
 const buildModerationResults = (
   task: TaskState | undefined,
   analysisByJobId: Record<string, AnalysisSidecar>,
@@ -67,6 +80,7 @@ const buildModerationResults = (
 };
 
 export {
+  buildLatestTaskJobByInput,
   buildLatestTaskOutputPathByInput,
   buildModerationResults,
   getLatestTask,

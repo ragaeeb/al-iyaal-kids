@@ -23,7 +23,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import type { JobRecord } from "@/features/batch/types";
 import { dedupePaths, isSupportedVideoPath } from "@/features/batch/utils";
+import { toMediaQuickActionId } from "@/features/media/quick-action-queue";
 import { listVideos } from "@/features/media/transport";
+import type { TaskJobRecord, TaskJobStatus } from "@/features/media/types";
 
 type RemoveMusicPanelProps = {
   isActive: boolean;
@@ -47,120 +49,277 @@ type RemoveMusicPanelProps = {
   onTrashOriginal: (path: string) => Promise<void>;
   transcriptionOutputByInputPath: Record<string, string>;
   analysisOutputByInputPath: Record<string, string>;
+  transcriptionJobByInputPath: Record<string, TaskJobRecord>;
+  analysisJobByInputPath: Record<string, TaskJobRecord>;
+  queuedTranscriptionPaths: string[];
+  queuedAnalysisPaths: string[];
+  launchingQuickActionId: string | null;
   onClearError: () => void;
 };
 
 type CompletedJobActionsProps = {
   analysisOutputByInputPath: Record<string, string>;
-  busyDetectPath: string | null;
+  analysisJobByInputPath: Record<string, TaskJobRecord>;
   job: JobRecord;
   busyTrashPath: string | null;
-  busyTranscribePath: string | null;
   isOriginalTrashed: boolean;
+  launchingQuickActionId: string | null;
   onOpenOutput: (path: string) => Promise<void>;
   onSendToProfanity: (path: string) => Promise<void>;
   onSendToCut: (path: string) => void;
   onSendToTranscription: (path: string) => Promise<void>;
   onTrashOriginal: (path: string) => Promise<void>;
-  setBusyDetectPath: (path: string | null) => void;
   setBusyTrashPath: (path: string | null) => void;
-  setBusyTranscribePath: (path: string | null) => void;
   transcriptionOutputByInputPath: Record<string, string>;
+  transcriptionJobByInputPath: Record<string, TaskJobRecord>;
+  queuedAnalysisPaths: string[];
+  queuedTranscriptionPaths: string[];
   setTrashedPaths: React.Dispatch<React.SetStateAction<string[]>>;
 };
 
 type ProcessedVideoQuickActionsProps = {
   analysisOutputByInputPath: Record<string, string>;
-  busyDetectPath: string | null;
-  busyTranscribePath: string | null;
+  analysisJobByInputPath: Record<string, TaskJobRecord>;
+  launchingQuickActionId: string | null;
   onSendToCut: (path: string) => void;
   onSendToProfanity: (path: string) => Promise<void>;
   onSendToTranscription: (path: string) => Promise<void>;
   processedVideoPath: string;
-  setBusyDetectPath: (path: string | null) => void;
-  setBusyTranscribePath: (path: string | null) => void;
+  queuedAnalysisPaths: string[];
+  queuedTranscriptionPaths: string[];
+  transcriptionJobByInputPath: Record<string, TaskJobRecord>;
   transcriptionOutputByInputPath: Record<string, string>;
+};
+
+type TranscriptionQuickActionState = {
+  isActive: boolean;
+  isQueued: boolean;
+  isStarting: boolean;
+  job: TaskJobRecord | undefined;
+};
+
+type AnalysisQuickActionState = {
+  hasCompletedAnalysis: boolean;
+  isActive: boolean;
+  isQueued: boolean;
+  isStarting: boolean;
+  job: TaskJobRecord | undefined;
+  subtitlePath: string | undefined;
 };
 
 const toStatusVariant = (status: JobRecord["status"]) => status;
 
 const toFileName = (path: string) => path.split("/").at(-1) ?? path;
 
+const isActiveTaskStatus = (status: TaskJobStatus | undefined) =>
+  status === "queued" || status === "running";
+
+const toStatusText = (status: TaskJobStatus, progressPct: number | undefined) => {
+  if (status === "completed") {
+    return "done";
+  }
+
+  if (status === "running" && typeof progressPct === "number") {
+    return `${progressPct}%`;
+  }
+
+  return status;
+};
+
+const QuickActionStatusBadge = ({
+  isQueued,
+  job,
+  label,
+}: {
+  isQueued: boolean;
+  job: TaskJobRecord | undefined;
+  label: string;
+}) => {
+  const status = isQueued ? "queued" : (job?.status ?? null);
+  if (!status) {
+    return null;
+  }
+
+  return (
+    <Badge className="min-w-0 px-1.5 normal-case" variant={status}>
+      {label} {toStatusText(status, job?.progressPct)}
+    </Badge>
+  );
+};
+
+const buildTranscriptionQuickActionState = ({
+  job,
+  launchingQuickActionId,
+  processedVideoPath,
+  queuedTranscriptionPaths,
+}: {
+  job: TaskJobRecord | undefined;
+  launchingQuickActionId: string | null;
+  processedVideoPath: string;
+  queuedTranscriptionPaths: string[];
+}): TranscriptionQuickActionState => {
+  const isQueued = queuedTranscriptionPaths.includes(processedVideoPath);
+
+  return {
+    isActive: isQueued || isActiveTaskStatus(job?.status),
+    isQueued,
+    isStarting:
+      launchingQuickActionId === toMediaQuickActionId("transcription", processedVideoPath),
+    job,
+  };
+};
+
+const buildAnalysisQuickActionState = ({
+  analysisJobByInputPath,
+  analysisOutputByInputPath,
+  launchingQuickActionId,
+  queuedAnalysisPaths,
+  subtitlePath,
+}: {
+  analysisJobByInputPath: Record<string, TaskJobRecord>;
+  analysisOutputByInputPath: Record<string, string>;
+  launchingQuickActionId: string | null;
+  queuedAnalysisPaths: string[];
+  subtitlePath: string | undefined;
+}): AnalysisQuickActionState => {
+  const job = subtitlePath ? analysisJobByInputPath[subtitlePath] : undefined;
+  const isQueued = subtitlePath ? queuedAnalysisPaths.includes(subtitlePath) : false;
+
+  return {
+    hasCompletedAnalysis: Boolean(subtitlePath && analysisOutputByInputPath[subtitlePath]),
+    isActive: isQueued || isActiveTaskStatus(job?.status),
+    isQueued,
+    isStarting:
+      subtitlePath !== undefined &&
+      launchingQuickActionId === toMediaQuickActionId("flag", subtitlePath),
+    job,
+    subtitlePath,
+  };
+};
+
+const TranscriptionQuickActionButton = ({
+  onClick,
+  state,
+}: {
+  onClick: () => void;
+  state: TranscriptionQuickActionState;
+}) => {
+  const isCompleted = state.job?.status === "completed";
+
+  return (
+    <Button
+      type="button"
+      size="icon"
+      variant={isCompleted ? "secondary" : "outline"}
+      title={isCompleted ? "Transcribe this video again" : "Transcribe this video"}
+      aria-label={isCompleted ? "Transcribe this video again" : "Transcribe this video"}
+      disabled={state.isActive}
+      onClick={onClick}
+    >
+      {state.isActive || state.isStarting ? (
+        <LoaderCircle className="size-3.5 animate-spin" />
+      ) : (
+        <ScanText className="size-3.5" />
+      )}
+    </Button>
+  );
+};
+
+const AnalysisQuickActionButton = ({
+  onClick,
+  state,
+}: {
+  onClick: (subtitlePath: string) => void;
+  state: AnalysisQuickActionState;
+}) => {
+  if (!state.subtitlePath) {
+    return null;
+  }
+
+  const subtitlePath = state.subtitlePath;
+  const label = state.hasCompletedAnalysis
+    ? "Run profanity detection again"
+    : "Run profanity detection";
+
+  return (
+    <Button
+      type="button"
+      size="icon"
+      variant={state.hasCompletedAnalysis ? "secondary" : "outline"}
+      title={label}
+      aria-label={label}
+      disabled={state.isActive}
+      onClick={() => onClick(subtitlePath)}
+    >
+      {state.isActive || state.isStarting ? (
+        <LoaderCircle className="size-3.5 animate-spin" />
+      ) : (
+        <ShieldAlert className="size-3.5" />
+      )}
+    </Button>
+  );
+};
+
 const ProcessedVideoQuickActions = ({
   analysisOutputByInputPath,
-  busyDetectPath,
-  busyTranscribePath,
+  analysisJobByInputPath,
+  launchingQuickActionId,
   onSendToCut,
   onSendToProfanity,
   onSendToTranscription,
   processedVideoPath,
-  setBusyDetectPath,
-  setBusyTranscribePath,
+  queuedAnalysisPaths,
+  queuedTranscriptionPaths,
+  transcriptionJobByInputPath,
   transcriptionOutputByInputPath,
 }: ProcessedVideoQuickActionsProps) => {
   const subtitlePath = transcriptionOutputByInputPath[processedVideoPath];
-  const hasCompletedAnalysis = Boolean(subtitlePath && analysisOutputByInputPath[subtitlePath]);
+  const transcriptionJob = transcriptionJobByInputPath[processedVideoPath];
+  const transcriptionState = buildTranscriptionQuickActionState({
+    job: transcriptionJob,
+    launchingQuickActionId,
+    processedVideoPath,
+    queuedTranscriptionPaths,
+  });
+  const analysisState = buildAnalysisQuickActionState({
+    analysisJobByInputPath,
+    analysisOutputByInputPath,
+    launchingQuickActionId,
+    queuedAnalysisPaths,
+    subtitlePath,
+  });
 
   return (
-    <div className="flex items-center gap-1">
-      <Button
-        type="button"
-        size="icon"
-        variant="secondary"
-        title="Transcribe this video"
-        aria-label="Transcribe this video"
-        disabled={busyTranscribePath === processedVideoPath}
-        onClick={async () => {
-          setBusyTranscribePath(processedVideoPath);
-          try {
-            await onSendToTranscription(processedVideoPath);
-          } finally {
-            setBusyTranscribePath(null);
-          }
-        }}
-      >
-        {busyTranscribePath === processedVideoPath ? (
-          <LoaderCircle className="size-3.5 animate-spin" />
-        ) : (
-          <ScanText className="size-3.5" />
-        )}
-      </Button>
-      {subtitlePath ? (
+    <div className="flex flex-col items-end gap-1">
+      <div className="flex items-center gap-1">
+        <TranscriptionQuickActionButton
+          onClick={() => onSendToTranscription(processedVideoPath)}
+          state={transcriptionState}
+        />
+        <AnalysisQuickActionButton onClick={onSendToProfanity} state={analysisState} />
         <Button
           type="button"
           size="icon"
-          variant={hasCompletedAnalysis ? "secondary" : "outline"}
-          title={hasCompletedAnalysis ? "Run profanity detection again" : "Run profanity detection"}
-          aria-label={
-            hasCompletedAnalysis ? "Run profanity detection again" : "Run profanity detection"
-          }
-          disabled={busyDetectPath === subtitlePath}
-          onClick={async () => {
-            setBusyDetectPath(subtitlePath);
-            try {
-              await onSendToProfanity(subtitlePath);
-            } finally {
-              setBusyDetectPath(null);
-            }
-          }}
+          variant="outline"
+          title="Open this video in Edit Video"
+          aria-label="Open this video in Edit Video"
+          onClick={() => onSendToCut(processedVideoPath)}
         >
-          {busyDetectPath === subtitlePath ? (
-            <LoaderCircle className="size-3.5 animate-spin" />
-          ) : (
-            <ShieldAlert className="size-3.5" />
-          )}
+          <Scissors className="size-3.5" />
         </Button>
-      ) : null}
-      <Button
-        type="button"
-        size="icon"
-        variant="outline"
-        title="Open this video in Edit Video"
-        aria-label="Open this video in Edit Video"
-        onClick={() => onSendToCut(processedVideoPath)}
-      >
-        <Scissors className="size-3.5" />
-      </Button>
+      </div>
+      <div className="flex flex-wrap justify-end gap-1">
+        <QuickActionStatusBadge
+          isQueued={transcriptionState.isQueued}
+          job={transcriptionJob}
+          label="Transcript"
+        />
+        <QuickActionStatusBadge
+          isQueued={analysisState.isQueued}
+          job={analysisState.job}
+          label="Analyze"
+        />
+      </div>
     </div>
   );
 };
@@ -253,20 +412,21 @@ const handleDragDropEvent = async ({
 
 const CompletedJobActions = ({
   analysisOutputByInputPath,
-  busyDetectPath,
+  analysisJobByInputPath,
   job,
   busyTrashPath,
-  busyTranscribePath,
   isOriginalTrashed,
+  launchingQuickActionId,
   onOpenOutput,
   onSendToProfanity,
   onSendToCut,
   onSendToTranscription,
   onTrashOriginal,
-  setBusyDetectPath,
   setBusyTrashPath,
-  setBusyTranscribePath,
   transcriptionOutputByInputPath,
+  transcriptionJobByInputPath,
+  queuedAnalysisPaths,
+  queuedTranscriptionPaths,
   setTrashedPaths,
 }: CompletedJobActionsProps) => {
   const outputPath = job.outputPath;
@@ -321,14 +481,15 @@ const CompletedJobActions = ({
             <div className="flex flex-wrap gap-1">
               <ProcessedVideoQuickActions
                 analysisOutputByInputPath={analysisOutputByInputPath}
-                busyDetectPath={busyDetectPath}
-                busyTranscribePath={busyTranscribePath}
+                analysisJobByInputPath={analysisJobByInputPath}
+                launchingQuickActionId={launchingQuickActionId}
                 onSendToCut={onSendToCut}
                 onSendToProfanity={onSendToProfanity}
                 onSendToTranscription={onSendToTranscription}
                 processedVideoPath={outputPath}
-                setBusyDetectPath={setBusyDetectPath}
-                setBusyTranscribePath={setBusyTranscribePath}
+                queuedAnalysisPaths={queuedAnalysisPaths}
+                queuedTranscriptionPaths={queuedTranscriptionPaths}
+                transcriptionJobByInputPath={transcriptionJobByInputPath}
                 transcriptionOutputByInputPath={transcriptionOutputByInputPath}
               />
               <Button
@@ -370,13 +531,16 @@ const RemoveMusicPanel = ({
   onTrashOriginal,
   transcriptionOutputByInputPath,
   analysisOutputByInputPath,
+  transcriptionJobByInputPath,
+  analysisJobByInputPath,
+  queuedTranscriptionPaths,
+  queuedAnalysisPaths,
+  launchingQuickActionId,
   onClearError,
 }: RemoveMusicPanelProps) => {
   const [isResolvingDrop, setIsResolvingDrop] = useState(false);
   const [isDropTargetActive, setIsDropTargetActive] = useState(false);
-  const [busyDetectPath, setBusyDetectPath] = useState<string | null>(null);
   const [busyTrashPath, setBusyTrashPath] = useState<string | null>(null);
-  const [busyTranscribePath, setBusyTranscribePath] = useState<string | null>(null);
   const [trashedPaths, setTrashedPaths] = useState<string[]>([]);
   const dropTargetRef = useRef<HTMLDivElement>(null);
   const jobInputPaths = useMemo(() => jobs.map((job) => job.inputPath), [jobs]);
@@ -482,20 +646,21 @@ const RemoveMusicPanel = ({
                       {job.status === "completed" ? (
                         <CompletedJobActions
                           analysisOutputByInputPath={analysisOutputByInputPath}
-                          busyDetectPath={busyDetectPath}
+                          analysisJobByInputPath={analysisJobByInputPath}
                           job={job}
                           busyTrashPath={busyTrashPath}
-                          busyTranscribePath={busyTranscribePath}
                           isOriginalTrashed={isOriginalTrashed}
+                          launchingQuickActionId={launchingQuickActionId}
                           onOpenOutput={onOpenOutput}
                           onSendToCut={onSendToCut}
                           onSendToProfanity={onSendToProfanity}
                           onSendToTranscription={onSendToTranscription}
                           onTrashOriginal={onTrashOriginal}
-                          setBusyDetectPath={setBusyDetectPath}
                           setBusyTrashPath={setBusyTrashPath}
-                          setBusyTranscribePath={setBusyTranscribePath}
                           transcriptionOutputByInputPath={transcriptionOutputByInputPath}
+                          transcriptionJobByInputPath={transcriptionJobByInputPath}
+                          queuedAnalysisPaths={queuedAnalysisPaths}
+                          queuedTranscriptionPaths={queuedTranscriptionPaths}
                           setTrashedPaths={setTrashedPaths}
                         />
                       ) : null}
@@ -589,14 +754,15 @@ const RemoveMusicPanel = ({
                             {processedOutputPath ? (
                               <ProcessedVideoQuickActions
                                 analysisOutputByInputPath={analysisOutputByInputPath}
-                                busyDetectPath={busyDetectPath}
-                                busyTranscribePath={busyTranscribePath}
+                                analysisJobByInputPath={analysisJobByInputPath}
+                                launchingQuickActionId={launchingQuickActionId}
                                 onSendToCut={onSendToCut}
                                 onSendToProfanity={onSendToProfanity}
                                 onSendToTranscription={onSendToTranscription}
                                 processedVideoPath={processedOutputPath}
-                                setBusyDetectPath={setBusyDetectPath}
-                                setBusyTranscribePath={setBusyTranscribePath}
+                                queuedAnalysisPaths={queuedAnalysisPaths}
+                                queuedTranscriptionPaths={queuedTranscriptionPaths}
+                                transcriptionJobByInputPath={transcriptionJobByInputPath}
                                 transcriptionOutputByInputPath={transcriptionOutputByInputPath}
                               />
                             ) : null}

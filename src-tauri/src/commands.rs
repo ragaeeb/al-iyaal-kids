@@ -20,12 +20,14 @@ use crate::{
     state::AppState,
     types::{
         AnalyticsSnapshot, BatchEvent, BatchStartedResponse, BatchState, BatchStatus, CancelAck,
-        CancelBatchRequest, CancelTaskRequest, CutJobStartedResponse, JobRecord, JobStatus,
-        ListSrtFilesRequest, ListVideosRequest, ModerationRule, ModerationSettings, SaveAck,
-        SrtListItem, StartBatchRequest, StartCutJobRequest, StartFlagBatchRequest,
-        StartTranscriptionBatchRequest, TaskCancelAck, TaskJobRecord, TaskJobStatus, TaskKind,
-        TaskState, TaskStatus, VideoListItem, WorkerStatusKind,
+        CancelBatchRequest, CancelTaskRequest, CutJobStartedResponse, FrameAnalysisResponse,
+        JobRecord, JobStatus, ListSrtFilesRequest, ListVideosRequest, ModerationRule,
+        ModerationSettings, SaveAck, ScanVideoFramesRequest, SrtListItem, StartBatchRequest,
+        StartCutJobRequest, StartFlagBatchRequest, StartTranscriptionBatchRequest, TaskCancelAck,
+        TaskJobRecord, TaskJobStatus, TaskKind, TaskState, TaskStatus, VideoListItem,
+        WorkerStatusKind,
     },
+    vision,
     worker::ensure_worker_sender,
 };
 
@@ -50,9 +52,15 @@ fn ensure_supported_cut_output_mode(output_mode: &str) -> Result<(), String> {
 
 fn ensure_supported_compression_preset(preset: &str) -> Result<(), String> {
     if preset != "max_compression" && preset != "balanced" {
-        return Err(
-            "Unsupported compression preset. Use max_compression or balanced.".to_string(),
-        );
+        return Err("Unsupported compression preset. Use max_compression or balanced.".to_string());
+    }
+
+    Ok(())
+}
+
+fn ensure_supported_frame_scan_interval(sample_interval_seconds: f32) -> Result<(), String> {
+    if !sample_interval_seconds.is_finite() || sample_interval_seconds <= 0.0 {
+        return Err("Frame scan interval must be greater than 0 seconds.".to_string());
     }
 
     Ok(())
@@ -106,12 +114,17 @@ fn resolve_input_paths(
     Ok(resolved_paths)
 }
 
-fn require_worker_sender(sender: Option<crate::state::WorkerSender>) -> Result<crate::state::WorkerSender, String> {
+fn require_worker_sender(
+    sender: Option<crate::state::WorkerSender>,
+) -> Result<crate::state::WorkerSender, String> {
     sender.ok_or_else(|| "Worker is not running.".to_string())
 }
 
 fn is_allowed_text_sidecar_path(path: &Path) -> bool {
-    let file_name = path.file_name().and_then(|value| value.to_str()).unwrap_or_default();
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
     let extension = path
         .extension()
         .and_then(|value| value.to_str())
@@ -310,11 +323,9 @@ pub async fn start_batch(
     let first_input_path = input_paths
         .first()
         .ok_or_else(|| "No .mp4/.mov files were selected.".to_string())?;
-    let output_dir = build_output_dir(
-        Path::new(first_input_path)
-            .parent()
-            .ok_or_else(|| format!("Failed to resolve parent directory for input path: {first_input_path}"))?,
-    );
+    let output_dir = build_output_dir(Path::new(first_input_path).parent().ok_or_else(|| {
+        format!("Failed to resolve parent directory for input path: {first_input_path}")
+    })?);
     let batch_id = Uuid::new_v4().to_string();
 
     state
@@ -328,7 +339,10 @@ pub async fn start_batch(
 
     app.emit(
         BATCH_EVENT_NAME,
-        BatchEvent::worker_status(WorkerStatusKind::Starting, "Preparing runtime and worker..."),
+        BatchEvent::worker_status(
+            WorkerStatusKind::Starting,
+            "Preparing runtime and worker...",
+        ),
     )
     .map_err(|error| format!("Failed to emit startup status: {error}"))?;
 
@@ -497,6 +511,22 @@ pub async fn start_cut_job(
 }
 
 #[tauri::command]
+pub async fn scan_video_frames(
+    app: AppHandle,
+    request: ScanVideoFramesRequest,
+) -> Result<FrameAnalysisResponse, String> {
+    let validated_path = validate_existing_file_path(&request.video_path)?;
+    if !vision::is_supported_frame_scan_path(&validated_path) {
+        return Err("Only .mp4 and .mov files are supported for flagged frame scans.".to_string());
+    }
+
+    let sample_interval_seconds = request.sample_interval_seconds.unwrap_or(2.0);
+    ensure_supported_frame_scan_interval(sample_interval_seconds)?;
+    let settings = read_or_initialize_moderation_settings(&app)?;
+    vision::scan_video_frames(&app, validated_path, settings, sample_interval_seconds).await
+}
+
+#[tauri::command]
 pub async fn cancel_batch(
     state: State<'_, AppState>,
     request: CancelBatchRequest,
@@ -589,9 +619,12 @@ pub async fn save_moderation_settings(
 #[tauri::command]
 pub async fn read_text_file(path: String) -> Result<String, String> {
     let validated_path = validate_read_text_file_path(&path)?;
-    let metadata = tokio_fs::metadata(&validated_path)
-        .await
-        .map_err(|error| format!("Failed reading file metadata {}: {error}", validated_path.display()))?;
+    let metadata = tokio_fs::metadata(&validated_path).await.map_err(|error| {
+        format!(
+            "Failed reading file metadata {}: {error}",
+            validated_path.display()
+        )
+    })?;
     if metadata.len() > MAX_READ_TEXT_FILE_BYTES {
         return Err(format!(
             "File is too large to read safely (max {} bytes): {}",
@@ -608,8 +641,12 @@ pub async fn read_text_file(path: String) -> Result<String, String> {
 #[tauri::command]
 pub async fn trash_file(path: String) -> Result<SaveAck, String> {
     let validated_path = validate_existing_file_path(&path)?;
-    trash::delete(&validated_path)
-        .map_err(|error| format!("Failed moving file to trash {}: {error}", validated_path.display()))?;
+    trash::delete(&validated_path).map_err(|error| {
+        format!(
+            "Failed moving file to trash {}: {error}",
+            validated_path.display()
+        )
+    })?;
     Ok(SaveAck { success: true })
 }
 
@@ -636,9 +673,10 @@ mod tests {
     use super::{
         create_task_jobs, default_moderation_settings, ensure_supported_cancel_mode,
         ensure_supported_compression_preset, ensure_supported_cut_output_mode,
-        ensure_supported_output_mode, ensure_supported_yap_mode,
-        get_batch_state_inner, get_task_state_inner, require_worker_sender, resolve_input_paths,
-        validate_existing_file_path, validate_read_text_file_path,
+        ensure_supported_frame_scan_interval, ensure_supported_output_mode,
+        ensure_supported_yap_mode, get_batch_state_inner, get_task_state_inner,
+        require_worker_sender, resolve_input_paths, validate_existing_file_path,
+        validate_read_text_file_path,
     };
     use crate::state::AppState;
     use uuid::Uuid;
@@ -667,6 +705,13 @@ mod tests {
     }
 
     #[test]
+    fn should_reject_non_positive_frame_scan_interval() {
+        assert!(ensure_supported_frame_scan_interval(0.0).is_err());
+        assert!(ensure_supported_frame_scan_interval(-1.0).is_err());
+        assert!(ensure_supported_frame_scan_interval(2.0).is_ok());
+    }
+
+    #[test]
     fn should_reject_unsupported_yap_mode() {
         let result = ensure_supported_yap_mode("manual");
         assert!(result.is_err());
@@ -674,7 +719,8 @@ mod tests {
 
     #[test]
     fn should_allow_reading_srt_sidecars() {
-        let base_dir = std::env::temp_dir().join(format!("al-iyaal-read-sidecar-{}", Uuid::new_v4()));
+        let base_dir =
+            std::env::temp_dir().join(format!("al-iyaal-read-sidecar-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&base_dir).unwrap();
         let path = base_dir.join("episode.srt");
         std::fs::write(&path, "1").unwrap();
@@ -688,7 +734,8 @@ mod tests {
 
     #[test]
     fn should_reject_non_sidecar_files_for_read_text_file() {
-        let base_dir = std::env::temp_dir().join(format!("al-iyaal-read-sidecar-{}", Uuid::new_v4()));
+        let base_dir =
+            std::env::temp_dir().join(format!("al-iyaal-read-sidecar-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&base_dir).unwrap();
         let path = base_dir.join("notes.txt");
         std::fs::write(&path, "secret").unwrap();
@@ -750,7 +797,8 @@ mod tests {
 
     #[test]
     fn should_expand_remove_music_input_paths_from_files_and_folders() {
-        let base_dir = std::env::temp_dir().join(format!("al-iyaal-start-batch-{}", Uuid::new_v4()));
+        let base_dir =
+            std::env::temp_dir().join(format!("al-iyaal-start-batch-{}", Uuid::new_v4()));
         let folder = base_dir.join("folder");
         std::fs::create_dir_all(&folder).unwrap();
         let direct_file = base_dir.join("a.mov");

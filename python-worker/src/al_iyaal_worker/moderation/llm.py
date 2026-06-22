@@ -176,7 +176,7 @@ def _resolve_strategy(settings: dict[str, Any]) -> str:
 
 
 def _gemini_model_for_strategy(strategy: str) -> str:
-    return "gemini-2.5-pro" if strategy == "deep" else "gemini-3.1-flash-lite-preview"
+    return "gemini-2.5-pro" if strategy == "deep" else "gemini-3.5-flash"
 
 
 def _nova_model_for_strategy(strategy: str) -> str:

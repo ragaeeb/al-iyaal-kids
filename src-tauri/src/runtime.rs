@@ -1,6 +1,5 @@
 use std::{
-    env,
-    fs,
+    env, fs,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -22,8 +21,12 @@ pub async fn ensure_runtime_ready(app: &AppHandle) -> Result<RuntimePaths, Strin
         .app_data_dir()
         .map_err(|error| format!("Failed to resolve app data directory: {error}"))?;
     let runtime_dir = app_data_dir.join("runtime");
-    fs::create_dir_all(&runtime_dir)
-        .map_err(|error| format!("Failed to create runtime directory {}: {error}", runtime_dir.display()))?;
+    fs::create_dir_all(&runtime_dir).map_err(|error| {
+        format!(
+            "Failed to create runtime directory {}: {error}",
+            runtime_dir.display()
+        )
+    })?;
 
     let worker_script = resolve_existing_path(&[
         PathBuf::from("python-worker/worker.py"),
@@ -54,7 +57,11 @@ pub async fn ensure_runtime_ready(app: &AppHandle) -> Result<RuntimePaths, Strin
         let requirements_clone = requirements_lock.clone();
 
         tauri::async_runtime::spawn_blocking(move || {
-            bootstrap_virtualenv(&base_python_candidates, &venv_dir_clone, &requirements_clone)
+            bootstrap_virtualenv(
+                &base_python_candidates,
+                &venv_dir_clone,
+                &requirements_clone,
+            )
         })
         .await
         .map_err(|error| format!("Failed waiting for Python runtime bootstrap: {error}"))??;
@@ -191,7 +198,11 @@ fn bootstrap_virtualenv(
                 .to_str()
                 .ok_or_else(|| format!("Invalid venv python path {}", venv_python.display()))?;
 
-            run_command(venv_python_bin, ["-m", "pip", "install", "--upgrade", "pip"], None)?;
+            run_command(
+                venv_python_bin,
+                ["-m", "pip", "install", "--upgrade", "pip"],
+                None,
+            )?;
             run_command(
                 venv_python_bin,
                 ["-m", "pip", "install", "-r", requirements_path],
@@ -242,7 +253,10 @@ fn run_command<'a>(
     ))
 }
 
-fn ensure_runtime_python_packages(python_executable: &Path, requirements_lock: &Path) -> Result<(), String> {
+fn ensure_runtime_python_packages(
+    python_executable: &Path,
+    requirements_lock: &Path,
+) -> Result<(), String> {
     let import_check = Command::new(python_executable)
         .args([
             "-c",
@@ -261,5 +275,9 @@ fn ensure_runtime_python_packages(python_executable: &Path, requirements_lock: &
     let requirements_path = requirements_lock
         .to_str()
         .ok_or_else(|| format!("Invalid requirements path {}", requirements_lock.display()))?;
-    run_command(python_binary, ["-m", "pip", "install", "-r", requirements_path], None)
+    run_command(
+        python_binary,
+        ["-m", "pip", "install", "-r", requirements_path],
+        None,
+    )
 }

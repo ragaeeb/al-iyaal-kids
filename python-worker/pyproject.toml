@@ -8,7 +8,7 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=8.4.0"]
-runtime = ["better-profanity", "demucs", "torch", "torchaudio", "torchcodec"]
+runtime = ["better-profanity", "demucs", "mlx-vlm==0.4.4", "torch==2.10.0", "torchaudio==2.10.0", "torchcodec"]
 
 [tool.pytest.ini_options]
 addopts = "-q"

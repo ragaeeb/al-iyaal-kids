@@ -135,10 +135,9 @@ impl WorkerCommand {
                 output_mode,
                 compression_preset,
             },
-            WorkerCommand::CancelBatch { batch_id, mode } => WorkerCommandMessage::CancelBatch {
-                batch_id,
-                mode,
-            },
+            WorkerCommand::CancelBatch { batch_id, mode } => {
+                WorkerCommandMessage::CancelBatch { batch_id, mode }
+            }
             WorkerCommand::CancelTask { task_id, mode } => {
                 WorkerCommandMessage::CancelTask { task_id, mode }
             }
@@ -250,22 +249,28 @@ pub fn to_frontend_batch_event(event: &WorkerEvent) -> Option<BatchEvent> {
             progress_pct,
             ..
         } => batch_id.as_ref().map(|batch_id| {
-            BatchEvent::job_progress(batch_id, job_id, progress_pct.round().clamp(0.0, 100.0) as u8)
+            BatchEvent::job_progress(
+                batch_id,
+                job_id,
+                progress_pct.round().clamp(0.0, 100.0) as u8,
+            )
         }),
         WorkerEvent::JobDone {
             batch_id,
             job_id,
             output_path,
             ..
-        } => batch_id
-            .as_ref()
-            .map(|batch_id| BatchEvent::job_done(batch_id, job_id, output_path.clone().unwrap_or_default())),
+        } => batch_id.as_ref().map(|batch_id| {
+            BatchEvent::job_done(batch_id, job_id, output_path.clone().unwrap_or_default())
+        }),
         WorkerEvent::JobError {
             batch_id,
             job_id,
             error,
             ..
-        } => batch_id.as_ref().map(|batch_id| BatchEvent::job_error(batch_id, job_id, error)),
+        } => batch_id
+            .as_ref()
+            .map(|batch_id| BatchEvent::job_error(batch_id, job_id, error)),
         WorkerEvent::BatchDone { batch_id, summary } => {
             Some(BatchEvent::batch_done(batch_id, summary.clone()))
         }
@@ -275,9 +280,14 @@ pub fn to_frontend_batch_event(event: &WorkerEvent) -> Option<BatchEvent> {
             message,
             stream,
             ..
-        } => batch_id
-            .as_ref()
-            .map(|batch_id| BatchEvent::job_log(batch_id, job_id, message, stream.clone().unwrap_or_else(|| "stdout".to_string()))),
+        } => batch_id.as_ref().map(|batch_id| {
+            BatchEvent::job_log(
+                batch_id,
+                job_id,
+                message,
+                stream.clone().unwrap_or_else(|| "stdout".to_string()),
+            )
+        }),
         WorkerEvent::WorkerStatus { status, message } => to_worker_status(status)
             .map(|status_kind| BatchEvent::worker_status(status_kind, message)),
         WorkerEvent::TaskDone { .. } => None,
@@ -335,7 +345,8 @@ pub fn to_frontend_task_event(event: &WorkerEvent) -> Option<TaskEvent> {
             task_id,
             task_kind,
             summary,
-        } => parse_task_kind(task_kind).map(|task_kind| TaskEvent::task_done(task_id, task_kind, summary.clone())),
+        } => parse_task_kind(task_kind)
+            .map(|task_kind| TaskEvent::task_done(task_id, task_kind, summary.clone())),
         WorkerEvent::JobLog {
             task_id,
             task_kind,
@@ -381,7 +392,8 @@ mod tests {
 
     #[test]
     fn should_parse_job_progress_event() {
-        let line = r#"{"type":"job_progress","batchId":"batch-1","jobId":"job-1","progressPct":42.4}"#;
+        let line =
+            r#"{"type":"job_progress","batchId":"batch-1","jobId":"job-1","progressPct":42.4}"#;
         let event = parse_worker_event(line).expect("worker event should parse");
 
         match event {

@@ -9,7 +9,9 @@ use tokio::{
 
 use crate::{
     analytics,
-    protocol::{parse_worker_event, to_frontend_batch_event, to_frontend_task_event, WorkerCommand},
+    protocol::{
+        parse_worker_event, to_frontend_batch_event, to_frontend_task_event, WorkerCommand,
+    },
     runtime::ensure_runtime_ready,
     state::AppState,
     types::{BatchEvent, TaskEvent, WorkerStatusKind},
@@ -20,12 +22,22 @@ const TASK_EVENT_NAME: &str = "task-event";
 
 fn is_worker_stderr_error(line: &str) -> bool {
     let normalized = line.trim().to_ascii_lowercase();
-    ["traceback", "error", "exception", "failed", "fatal", "panic"]
-        .iter()
-        .any(|token| normalized.contains(token))
+    [
+        "traceback",
+        "error",
+        "exception",
+        "failed",
+        "fatal",
+        "panic",
+    ]
+    .iter()
+    .any(|token| normalized.contains(token))
 }
 
-pub async fn ensure_worker_sender(app: AppHandle, state: AppState) -> Result<crate::state::WorkerSender, String> {
+pub async fn ensure_worker_sender(
+    app: AppHandle,
+    state: AppState,
+) -> Result<crate::state::WorkerSender, String> {
     if let Some(sender) = state.worker_sender().await {
         if !sender.is_closed() {
             return Ok(sender);
@@ -34,12 +46,18 @@ pub async fn ensure_worker_sender(app: AppHandle, state: AppState) -> Result<cra
 
     app.emit(
         BATCH_EVENT_NAME,
-        BatchEvent::worker_status(WorkerStatusKind::Starting, "Starting persistent Python worker..."),
+        BatchEvent::worker_status(
+            WorkerStatusKind::Starting,
+            "Starting persistent Python worker...",
+        ),
     )
     .map_err(|error| format!("Failed to emit worker startup event: {error}"))?;
     app.emit(
         TASK_EVENT_NAME,
-        TaskEvent::worker_status(WorkerStatusKind::Starting, "Starting persistent Python worker..."),
+        TaskEvent::worker_status(
+            WorkerStatusKind::Starting,
+            "Starting persistent Python worker...",
+        ),
     )
     .map_err(|error| format!("Failed to emit task startup event: {error}"))?;
 
@@ -99,9 +117,18 @@ async fn spawn_worker_process(
         .env("PYTHONUNBUFFERED", "1")
         .env("PYTHONPATH", merged_python_path)
         .env("PATH", merged_path)
-        .env("AIYAAL_DEMUCS_PATH", demucs_path.to_string_lossy().to_string())
-        .env("AIYAAL_FFMPEG_PATH", runtime.ffmpeg_executable.to_string_lossy().to_string())
-        .env("AIYAAL_YAP_PATH", runtime.yap_executable.to_string_lossy().to_string());
+        .env(
+            "AIYAAL_DEMUCS_PATH",
+            demucs_path.to_string_lossy().to_string(),
+        )
+        .env(
+            "AIYAAL_FFMPEG_PATH",
+            runtime.ffmpeg_executable.to_string_lossy().to_string(),
+        )
+        .env(
+            "AIYAAL_YAP_PATH",
+            runtime.yap_executable.to_string_lossy().to_string(),
+        );
 
     let mut child = command.spawn().map_err(|error| {
         format!(
@@ -233,7 +260,10 @@ async fn spawn_worker_process(
             }
             let _ = app_for_stderr.emit(
                 BATCH_EVENT_NAME,
-                BatchEvent::worker_status(WorkerStatusKind::Error, format!("worker stderr: {line}")),
+                BatchEvent::worker_status(
+                    WorkerStatusKind::Error,
+                    format!("worker stderr: {line}"),
+                ),
             );
             let _ = app_for_stderr.emit(
                 TASK_EVENT_NAME,
@@ -248,18 +278,18 @@ async fn spawn_worker_process(
         let status = child.wait().await;
         state_for_wait.clear_worker_sender().await;
 
-        let has_active_tasks = state_for_wait
-            .tasks
-            .lock()
-            .await
-            .values()
-            .any(|task| matches!(task.status, crate::types::TaskStatus::Queued | crate::types::TaskStatus::Running));
-        let has_active_batches = state_for_wait
-            .batches
-            .lock()
-            .await
-            .values()
-            .any(|batch| matches!(batch.status, crate::types::BatchStatus::Queued | crate::types::BatchStatus::Running));
+        let has_active_tasks = state_for_wait.tasks.lock().await.values().any(|task| {
+            matches!(
+                task.status,
+                crate::types::TaskStatus::Queued | crate::types::TaskStatus::Running
+            )
+        });
+        let has_active_batches = state_for_wait.batches.lock().await.values().any(|batch| {
+            matches!(
+                batch.status,
+                crate::types::BatchStatus::Queued | crate::types::BatchStatus::Running
+            )
+        });
         let has_active_work = has_active_tasks || has_active_batches;
 
         let (message, is_error) = match status {
@@ -270,7 +300,10 @@ async fn spawn_worker_process(
                 format!("Worker process exited while work was still active: {exit_status}"),
                 true,
             ),
-            Ok(exit_status) => (format!("Worker process exited unexpectedly: {exit_status}"), true),
+            Ok(exit_status) => (
+                format!("Worker process exited unexpectedly: {exit_status}"),
+                true,
+            ),
             Err(error) => (format!("Failed waiting on worker process: {error}"), true),
         };
         eprintln!("{message}");
@@ -311,7 +344,11 @@ mod tests {
 
     #[test]
     fn should_ignore_informational_worker_stderr_lines() {
-        assert!(!is_worker_stderr_error("Using cache found in /Users/test/.cache"));
-        assert!(!is_worker_stderr_error("UserWarning: This path is deprecated."));
+        assert!(!is_worker_stderr_error(
+            "Using cache found in /Users/test/.cache"
+        ));
+        assert!(!is_worker_stderr_error(
+            "UserWarning: This path is deprecated."
+        ));
     }
 }

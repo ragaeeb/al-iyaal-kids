@@ -38,11 +38,7 @@ const toTaskActivity = (
   const isTaskRunning = taskStatus === "running";
 
   return {
-    buttonLabel: isTaskStarting
-      ? "Starting..."
-      : isTaskRunning
-        ? "Transcribing..."
-        : "Transcribe",
+    buttonLabel: isTaskStarting ? "Starting..." : isTaskRunning ? "Transcribing..." : "Transcribe",
     isBusy: isTaskStarting || isTaskRunning,
   };
 };
@@ -247,7 +243,9 @@ const TranscribePanel = ({ controller, isActive }: TranscribePanelProps) => {
             </span>
             Transcribe
           </CardTitle>
-          <p className="mt-0.5 text-[#8f5e56] text-xs">Generate subtitles from videos or folders.</p>
+          <p className="mt-0.5 text-[#8f5e56] text-xs">
+            Generate subtitles from videos or folders.
+          </p>
         </div>
         <TaskDrawer
           triggerLabel="Open Task"
@@ -256,22 +254,22 @@ const TranscribePanel = ({ controller, isActive }: TranscribePanelProps) => {
         >
           {transcriptionTask ? (
             <div className="space-y-1.5">
-          <div className="flex items-center justify-between rounded-[12px] border border-[#ead3c4] bg-[#fffaf6] px-2 py-1.5">
+              <div className="flex items-center justify-between rounded-[12px] border border-[#ead3c4] bg-[#fffaf6] px-2 py-1.5">
                 <div>
-                   <p className="text-[#8f5e56] text-xs">Task Status</p>
-                   <p className="mt-0.5 font-medium text-[#5b2722] text-xs">
-                      {transcriptionTask.taskId}
-                    </p>
-                  </div>
-                  <Badge variant={toTaskStatusVariant(transcriptionTask.status)}>
-                    {transcriptionTask.status}
-                  </Badge>
+                  <p className="text-[#8f5e56] text-xs">Task Status</p>
+                  <p className="mt-0.5 font-medium text-[#5b2722] text-xs">
+                    {transcriptionTask.taskId}
+                  </p>
                 </div>
-                {transcriptionTask.jobs.map((job) => (
-                  <div
-                    key={job.jobId}
-                    className="rounded-[12px] border border-[#ead3c4] bg-[#fffaf7] p-1.5"
-                  >
+                <Badge variant={toTaskStatusVariant(transcriptionTask.status)}>
+                  {transcriptionTask.status}
+                </Badge>
+              </div>
+              {transcriptionTask.jobs.map((job) => (
+                <div
+                  key={job.jobId}
+                  className="rounded-[12px] border border-[#ead3c4] bg-[#fffaf7] p-1.5"
+                >
                   <div className="flex items-center justify-between gap-3">
                     <p className="truncate font-medium text-[#5f2823] text-xs">{job.fileName}</p>
                     <Badge variant={job.status === "completed" ? "completed" : job.status}>

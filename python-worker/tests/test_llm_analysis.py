@@ -71,7 +71,7 @@ def test_should_describe_gemini_fast_request_config() -> None:
     request_config = describe_llm_request({"analysisStrategy": "fast", "engine": "gemini"})
 
     assert request_config.engine == "gemini"
-    assert request_config.model == "gemini-3.1-flash-lite-preview"
+    assert request_config.model == "gemini-3.5-flash"
     assert "generativelanguage.googleapis.com" in request_config.endpoint
     assert request_config.strategy == "fast"
 

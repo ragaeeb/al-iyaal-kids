@@ -90,6 +90,24 @@ const isWithinDropTarget = (
   );
 };
 
+const resolveDroppedSrtPaths = (
+  event: { payload: DragDropEvent },
+  dropTargetRef: RefObject<HTMLDivElement | null>,
+) => {
+  if (
+    !("position" in event.payload) ||
+    !isWithinDropTarget(dropTargetRef, event.payload.position)
+  ) {
+    return [];
+  }
+
+  if (!("paths" in event.payload)) {
+    return [];
+  }
+
+  return event.payload.paths.filter((path: string) => isSupportedSrtPath(path));
+};
+
 const toTaskActivity = (
   taskStatus: MediaController["state"]["tasksById"][string]["status"] | undefined,
   workerStatus: MediaController["state"]["workerStatus"],
@@ -553,28 +571,24 @@ const ProfanityPanel = ({ controller, isActive }: ProfanityPanelProps) => {
         return;
       }
 
-      if (event.payload.type === "leave") {
-        setIsDropTargetActive(false);
-        return;
-      }
+      switch (event.payload.type) {
+        case "leave":
+          setIsDropTargetActive(false);
+          return;
+        case "over":
+        case "enter":
+          setIsDropTargetActive(isWithinDropTarget(dropTargetRef, event.payload.position));
+          return;
+        default: {
+          setIsDropTargetActive(false);
+          const droppedPaths = resolveDroppedSrtPaths(event, dropTargetRef);
+          if (droppedPaths.length === 0) {
+            return;
+          }
 
-      if (event.payload.type === "over" || event.payload.type === "enter") {
-        setIsDropTargetActive(isWithinDropTarget(dropTargetRef, event.payload.position));
-        return;
+          setSelectedSrtPaths((previous) => dedupePaths([...previous, ...droppedPaths]));
+        }
       }
-
-      const droppedInsideTarget = isWithinDropTarget(dropTargetRef, event.payload.position);
-      setIsDropTargetActive(false);
-      if (!droppedInsideTarget) {
-        return;
-      }
-
-      const droppedPaths = event.payload.paths.filter((path) => isSupportedSrtPath(path));
-      if (droppedPaths.length === 0) {
-        return;
-      }
-
-      setSelectedSrtPaths((previous) => dedupePaths([...previous, ...droppedPaths]));
     };
 
     let cleanup: (() => void) | undefined;

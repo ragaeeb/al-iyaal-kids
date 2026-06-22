@@ -8,13 +8,12 @@ Guidance for AI/code agents working in this repository.
 
 - Dashboard
 - Remove Music
-- Transcribe
-- Profanity Detection
-- Cut Video
+- Edit Video
 - Analytics
 - Settings
 
 The app is local-first and privacy-first. Do not introduce telemetry by default.
+Do not describe the app as fully offline: subtitle moderation can use opt-in cloud providers when the user selects `Gemini` or `Nova Pro`.
 
 ## Core standards
 
@@ -41,27 +40,23 @@ The app is local-first and privacy-first. Do not introduce telemetry by default.
   - folder-based `.mp4` / `.mov` processing
   - Demucs vocals extraction + ffmpeg remux
   - outputs to `audio_replaced/`
-- Transcribe
-  - one or more videos or a folder
-  - local STT via `yap`
-  - writes sibling `.srt` sidecars
-- Profanity Detection
-  - one or more `.srt` files or a folder
-  - per-run engine selection in the detection page itself
-  - per-run reasoning depth in the detection page itself
-  - can load existing sibling `.analysis.json` results
-  - writes sibling `.analysis.json` sidecars
+- Edit Video
+  - current shell entry point for subtitle generation, subtitle review, content flagging, frame scans, and cut export
+  - works on one selected `.mp4` / `.mov` at a time
+  - `Subtitles` drawer can generate sibling `.srt` sidecars via local STT with `yap`
+  - `Flagged Sections` drawer can load existing sibling `.analysis.json` results or generate them from subtitle sidecars
+  - subtitle analysis supports per-run engine selection (`Blacklist`, `Gemini`, `Nova Pro`) and per-run reasoning depth (`Fast`, `Deep`)
+  - `Flagged Frames` drawer runs a local frame scan and writes sibling `.frames.analysis.json` sidecars
+  - cut export is range-based and writes to `video_cleaned/`
+  - delete action trashes the selected video plus matching `.srt`, `.analysis.json`, and `.frames.analysis.json` sidecars when present
   - API keys live in `Settings`, not in `Analytics`
-- Cut Video
-  - simple player + exact range export
-  - can display subtitle-at-cursor from sibling `.srt`
-  - can jump to flagged timestamps from sibling `.analysis.json`
 - Analytics
   - local-only persisted counters
+  - tracks remove-music, transcription, detection, and cut runs through existing completion events
   - includes detection-specific totals like flagged lines and files with flags
 - Cancel semantics
   - `stop_after_current`
-  - do not misrepresent this as mid-request abort for an in-flight single-file LLM call
+  - do not misrepresent this as a mid-request abort for an in-flight single-file LLM call or a single frame-scan subprocess
 
 ## Testing conventions
 
@@ -129,6 +124,10 @@ When debugging failures or stalls:
   - `ffprobe` output
   - asset protocol path handling (`convertFileSrc` flow)
   - `src/features/editor/playback-compat.test.ts`
+- for frame scan issues, check:
+  - `src-tauri/src/vision.rs`
+  - `python-worker/src/al_iyaal_worker/vision_scan.py`
+  - sibling `.frames.analysis.json` creation
 - for analytics issues, check:
   - app data analytics history file creation
   - Rust completion-event recording path
@@ -138,17 +137,18 @@ When debugging failures or stalls:
 ## Repository map
 
 - `src/` React app, feature domain logic, tests.
-- `src/features/app/`: sidebar navigation/page definitions.
+- `src/features/app/`: sidebar navigation/page definitions for `Dashboard`, `Remove Music`, `Edit Video`, `Analytics`, and `Settings`.
 - `src/features/analytics/`: analytics snapshot types, transport, dashboard derivation utilities.
 - `src/features/batch/`: remove-music state/transport/tests.
 - `src/features/media/`: transcription/flag/cut task contracts + reducer + transport.
 - `src/features/editor/`: subtitle parsing, range building, playback compatibility, fixtures.
 - `src/features/moderation/`: moderation settings validation and result utilities.
 - `src/components/layout/`: `app-shell`, `sidebar-nav`, `page-header`, analytics card components.
-- `src/components/`: workflow pages and shared UI.
-- `src-tauri/`: Rust backend, analytics persistence, Tauri commands, runtime bootstrap, worker orchestration.
-- `python-worker/`: Python daemon and media-processing pipeline.
+- `src/components/`: workflow panels and shared UI. `simple-cut-editor-panel.tsx` is the mounted editor surface in `App.tsx`; standalone `transcribe-panel.tsx` and `profanity-panel.tsx` are currently not wired into the shell.
+- `src-tauri/`: Rust backend, analytics persistence, Tauri commands, runtime bootstrap, worker orchestration, and local frame-scan orchestration.
+- `python-worker/`: Python daemon, media-processing pipeline, moderation helpers, and local frame-scan implementation.
 - `scripts/`: bootstrap/check/release/version sync helpers.
+- `docs/local-frame-scan.md`: current local frame-scan architecture, outputs, and constraints.
 - `docs/macos-signing-notarization.md`: local signing/notarization workflow and Apple/Tauri references.
 - `.github/workflows/`: CI and semantic-release pipelines.
 

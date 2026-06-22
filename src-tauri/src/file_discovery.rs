@@ -5,15 +5,27 @@ use std::{
 
 use crate::types::{SrtListItem, VideoListItem};
 
-pub fn collect_media_files(input_dir: &Path, allowed_extensions: &[String]) -> Result<Vec<PathBuf>, String> {
+pub fn collect_media_files(
+    input_dir: &Path,
+    allowed_extensions: &[String],
+) -> Result<Vec<PathBuf>, String> {
     if !input_dir.is_dir() {
-        return Err(format!("Input path is not a directory: {}", input_dir.display()));
+        return Err(format!(
+            "Input path is not a directory: {}",
+            input_dir.display()
+        ));
     }
 
     let normalized_extensions: Vec<String> = allowed_extensions
         .iter()
         .map(|value| value.trim().to_ascii_lowercase())
-        .map(|value| if value.starts_with('.') { value } else { format!(".{value}") })
+        .map(|value| {
+            if value.starts_with('.') {
+                value
+            } else {
+                format!(".{value}")
+            }
+        })
         .collect();
 
     let mut files = fs::read_dir(input_dir)
@@ -41,7 +53,13 @@ pub fn collect_media_files_from_inputs(
     let normalized_extensions: Vec<String> = allowed_extensions
         .iter()
         .map(|value| value.trim().to_ascii_lowercase())
-        .map(|value| if value.starts_with('.') { value } else { format!(".{value}") })
+        .map(|value| {
+            if value.starts_with('.') {
+                value
+            } else {
+                format!(".{value}")
+            }
+        })
         .collect();
 
     let mut files = Vec::new();
@@ -63,7 +81,10 @@ pub fn collect_media_files_from_inputs(
             .map(|value| format!(".{value}").to_ascii_lowercase())
             .unwrap_or_default();
         if !normalized_extensions.contains(&extension) {
-            return Err(format!("Unsupported file extension for path: {}", path.display()));
+            return Err(format!(
+                "Unsupported file extension for path: {}",
+                path.display()
+            ));
         }
 
         files.push(path);
@@ -78,7 +99,10 @@ pub fn build_output_dir(input_dir: &Path) -> PathBuf {
     input_dir.join("audio_replaced")
 }
 
-pub fn discover_video_items(input_dir: &Path, allowed_extensions: &[String]) -> Result<Vec<VideoListItem>, String> {
+pub fn discover_video_items(
+    input_dir: &Path,
+    allowed_extensions: &[String],
+) -> Result<Vec<VideoListItem>, String> {
     let files = collect_media_files(input_dir, allowed_extensions)?;
 
     let mut videos = files
@@ -154,7 +178,8 @@ mod tests {
 
     #[test]
     fn should_collect_media_files_from_mixed_file_and_folder_inputs() {
-        let base_dir = std::env::temp_dir().join(format!("al-iyaal-file-discovery-{}", uuid::Uuid::new_v4()));
+        let base_dir =
+            std::env::temp_dir().join(format!("al-iyaal-file-discovery-{}", uuid::Uuid::new_v4()));
         let folder = base_dir.join("folder");
         fs::create_dir_all(&folder).unwrap();
         let direct_file = base_dir.join("clip-a.mp4");

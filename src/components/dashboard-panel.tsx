@@ -26,7 +26,7 @@ const DashboardPanel = ({ onNavigate }: DashboardPanelProps) => {
             <p className="font-medium text-[#9e5c50] text-xs uppercase tracking-[0.2em]">
               al-Iyaal Kids
             </p>
-            <h2 className="mt-1 text-base text-[#88322d] tracking-tight">
+            <h2 className="mt-1 text-[#88322d] text-base tracking-tight">
               Media tools for Muslim families
             </h2>
             <p className="mt-0.5 max-w-3xl text-[#7f524a] text-xs leading-4">
@@ -38,7 +38,12 @@ const DashboardPanel = ({ onNavigate }: DashboardPanelProps) => {
                 <WandSparkles className="size-3" />
                 Open Remove Music
               </Button>
-              <Button type="button" size="sm" variant="secondary" onClick={() => onNavigate("analytics")}>
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                onClick={() => onNavigate("analytics")}
+              >
                 <ChartColumn className="size-3" />
                 View Analytics
               </Button>
@@ -63,7 +68,7 @@ const DashboardPanel = ({ onNavigate }: DashboardPanelProps) => {
         </CardContent>
       </Card>
 
-      <div className="grid gap-2 lg:col-span-2 lg:grid-cols-5 sm:grid-cols-3">
+      <div className="grid gap-2 sm:grid-cols-3 lg:col-span-2 lg:grid-cols-5">
         {appPages.map((page) => {
           const Icon = page.icon;
 

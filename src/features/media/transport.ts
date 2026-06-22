@@ -1,8 +1,15 @@
-import { MEDIA_ALLOWED_EXTENSIONS, TASK_EVENT_NAME } from "@/features/media/constants";
+import {
+  FRAME_SCAN_EVENT_NAME,
+  MEDIA_ALLOWED_EXTENSIONS,
+  TASK_EVENT_NAME,
+} from "@/features/media/constants";
 import type {
   CancelTaskRequest,
   CutJobStartedResponse,
+  FrameAnalysisResponse,
+  FrameScanEvent,
   ModerationSettings,
+  ScanVideoFramesRequest,
   SrtListItem,
   StartCutJobRequest,
   StartFlagBatchRequest,
@@ -51,6 +58,11 @@ export const startCutJob = (request: StartCutJobRequest, invokeFn: InvokeFn = in
     request,
   });
 
+export const scanVideoFrames = (request: ScanVideoFramesRequest, invokeFn: InvokeFn = invoke) =>
+  invokeFn<FrameAnalysisResponse>("scan_video_frames", {
+    request,
+  });
+
 export const cancelTask = (request: CancelTaskRequest, invokeFn: InvokeFn = invoke) =>
   invokeFn<TaskCancelAck>("cancel_task", {
     request,
@@ -79,5 +91,13 @@ export const subscribeToTaskEvents = async (
   listenFn: ListenFn = listen,
 ): Promise<UnlistenFn> =>
   listenFn<TaskEvent>(TASK_EVENT_NAME, (event) => {
+    onEvent(event.payload);
+  });
+
+export const subscribeToFrameScanEvents = async (
+  onEvent: (event: FrameScanEvent) => void,
+  listenFn: ListenFn = listen,
+): Promise<UnlistenFn> =>
+  listenFn<FrameScanEvent>(FRAME_SCAN_EVENT_NAME, (event) => {
     onEvent(event.payload);
   });

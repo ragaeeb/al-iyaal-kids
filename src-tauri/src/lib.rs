@@ -6,6 +6,7 @@ mod protocol;
 mod runtime;
 mod state;
 mod types;
+mod vision;
 mod worker;
 
 use tauri::menu::{AboutMetadataBuilder, Menu, MenuItem, SubmenuBuilder};
@@ -63,7 +64,10 @@ pub fn run() {
                 )?)
                 .build()?;
 
-            Menu::with_items(app, &[&app_menu, &file_menu, &edit_menu, &window_menu, &help_menu])
+            Menu::with_items(
+                app,
+                &[&app_menu, &file_menu, &edit_menu, &window_menu, &help_menu],
+            )
         })
         .on_menu_event(|app, event| {
             if event.id() == GITHUB_MENU_ID {
@@ -78,6 +82,7 @@ pub fn run() {
             commands::start_transcription_batch,
             commands::start_flag_batch,
             commands::start_cut_job,
+            commands::scan_video_frames,
             commands::cancel_batch,
             commands::cancel_task,
             commands::get_batch_state,

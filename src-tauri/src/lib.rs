@@ -2,6 +2,7 @@ mod analytics;
 mod commands;
 mod file_discovery;
 mod ids;
+mod media_preview;
 mod protocol;
 mod runtime;
 mod state;
@@ -93,6 +94,7 @@ pub fn run() {
             commands::get_moderation_settings,
             commands::save_moderation_settings,
             commands::read_text_file,
+            commands::get_media_preview_url,
             commands::trash_file,
             commands::open_folder_picker,
         ])

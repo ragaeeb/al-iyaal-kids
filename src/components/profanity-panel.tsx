@@ -504,7 +504,7 @@ const ResultsSection = ({ moderationResults }: ResultsSectionProps) => (
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
               <p className="truncate font-medium text-[#5f2823] text-xs">{result.fileName}</p>
-              <p className="mt-0.5 text-[#8f5e56] text-xs">{result.summary}</p>
+              <p className="mt-0.5 whitespace-pre-line text-[#8f5e56] text-xs">{result.summary}</p>
             </div>
             <div className="flex items-center gap-1">
               <Badge variant={result.status === "completed" ? "completed" : result.status}>

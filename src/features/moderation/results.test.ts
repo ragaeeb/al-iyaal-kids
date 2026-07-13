@@ -86,6 +86,68 @@ describe("moderation results", () => {
     expect(sidecar.flagged[0]?.reason).toContain("Musical performance");
   });
 
+  it("should consolidate multiple analysis sidecars from a top-level array", () => {
+    const sidecar = parseAnalysisSidecar(
+      JSON.stringify([
+        {
+          createdAt: "2026-03-09T00:00:00.000Z",
+          engine: "gemini",
+          flagged: [
+            {
+              category: "music",
+              endTime: 11,
+              priority: "low",
+              reason: "Musical performance.",
+              ruleId: "gemini",
+              startTime: 10,
+              text: "Song starts.",
+            },
+          ],
+          summary: "Gemini summary.",
+          videoFileName: "episode.srt",
+        },
+        {
+          createdAt: "2026-03-10T00:00:00.000Z",
+          engine: "nova_pro",
+          flagged: [
+            {
+              category: "relationships",
+              endTime: 12,
+              priority: "high",
+              reason: "Romantic lyric in song.",
+              ruleId: "nova_pro",
+              startTime: 10.1,
+              text: "Song starts with a romantic lyric.",
+            },
+            {
+              priority: "medium",
+              reason: "Frightening scene.",
+              startTime: 20,
+            },
+          ],
+          summary: "Nova summary.",
+          videoFileName: "episode.srt",
+        },
+      ]),
+    );
+
+    expect(sidecar.engine).toBe("gemini");
+    expect(sidecar.createdAt).toBe("2026-03-09T00:00:00.000Z");
+    expect(sidecar.videoFileName).toBe("episode.srt");
+    expect(sidecar.summary).toBe("Gemini summary.\n\nNova summary.");
+    expect(sidecar.flagged).toHaveLength(2);
+    expect(sidecar.flagged[0]).toEqual({
+      category: "music, relationships",
+      endTime: 12,
+      priority: "high",
+      reason: "Musical performance.; Romantic lyric in song.",
+      ruleId: "gemini, nova_pro",
+      startTime: 10,
+      text: "Song starts with a romantic lyric.",
+    });
+    expect(sidecar.flagged[1]?.startTime).toBe(20);
+  });
+
   it("should derive a job result from sidecar data before falling back to artifacts", () => {
     const result = toModerationJobResult(
       {

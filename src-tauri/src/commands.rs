@@ -133,6 +133,16 @@ fn is_allowed_text_sidecar_path(path: &Path) -> bool {
     matches!(extension.as_deref(), Some("srt")) || file_name.ends_with(".analysis.json")
 }
 
+fn is_allowed_preview_video_path(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|value| value.to_str())
+            .map(|value| value.to_ascii_lowercase())
+            .as_deref(),
+        Some("mp4" | "mov")
+    )
+}
+
 fn validate_read_text_file_path(path: &str) -> Result<PathBuf, String> {
     if path.trim().is_empty() {
         return Err("File path is required.".to_string());
@@ -148,6 +158,15 @@ fn validate_read_text_file_path(path: &str) -> Result<PathBuf, String> {
 
     if !is_allowed_text_sidecar_path(&canonical) {
         return Err("Only .srt and .analysis.json sidecar files can be read.".to_string());
+    }
+
+    Ok(canonical)
+}
+
+fn validate_preview_video_path(path: &str) -> Result<PathBuf, String> {
+    let canonical = validate_existing_file_path(path)?;
+    if !is_allowed_preview_video_path(&canonical) {
+        return Err("Only .mp4 and .mov files can be previewed.".to_string());
     }
 
     Ok(canonical)
@@ -639,6 +658,12 @@ pub async fn read_text_file(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+pub async fn get_media_preview_url(path: String) -> Result<String, String> {
+    let validated_path = validate_preview_video_path(&path)?;
+    crate::media_preview::register_media_preview_path(validated_path)
+}
+
+#[tauri::command]
 pub async fn trash_file(path: String) -> Result<SaveAck, String> {
     let validated_path = validate_existing_file_path(&path)?;
     trash::delete(&validated_path).map_err(|error| {
@@ -676,7 +701,7 @@ mod tests {
         ensure_supported_frame_scan_interval, ensure_supported_output_mode,
         ensure_supported_yap_mode, get_batch_state_inner, get_task_state_inner,
         require_worker_sender, resolve_input_paths, validate_existing_file_path,
-        validate_read_text_file_path,
+        validate_preview_video_path, validate_read_text_file_path,
     };
     use crate::state::AppState;
     use uuid::Uuid;
@@ -743,6 +768,36 @@ mod tests {
         let error = validate_read_text_file_path(path.to_string_lossy().as_ref()).unwrap_err();
 
         assert!(error.contains(".srt and .analysis.json"));
+
+        std::fs::remove_dir_all(base_dir).unwrap();
+    }
+
+    #[test]
+    fn should_validate_preview_video_files() {
+        let base_dir =
+            std::env::temp_dir().join(format!("al-iyaal-preview-video-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&base_dir).unwrap();
+        let path = base_dir.join("episode.mp4");
+        std::fs::write(&path, "1").unwrap();
+
+        let validated = validate_preview_video_path(path.to_string_lossy().as_ref()).unwrap();
+
+        assert_eq!(validated, path.canonicalize().unwrap());
+
+        std::fs::remove_dir_all(base_dir).unwrap();
+    }
+
+    #[test]
+    fn should_reject_unsupported_preview_video_files() {
+        let base_dir =
+            std::env::temp_dir().join(format!("al-iyaal-preview-video-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&base_dir).unwrap();
+        let path = base_dir.join("episode.mkv");
+        std::fs::write(&path, "1").unwrap();
+
+        let error = validate_preview_video_path(path.to_string_lossy().as_ref()).unwrap_err();
+
+        assert!(error.contains(".mp4 and .mov"));
 
         std::fs::remove_dir_all(base_dir).unwrap();
     }

@@ -31,6 +31,7 @@ import {
 import { appendBoundedLogLine } from "@/features/media/logs";
 import { getLatestTask, getTaskOutputPath } from "@/features/media/selectors";
 import {
+  getMediaPreviewUrl,
   readTextFile,
   scanVideoFrames,
   subscribeToFrameScanEvents,
@@ -723,7 +724,7 @@ const FlaggedSectionsDrawerContent = ({
         <div className="flex items-start justify-between gap-2">
           <div className="space-y-0.5">
             <p className="text-[#8f5e56] text-xs">Summary</p>
-            <p className="text-[#5b2722] text-xs">{analysisSidecar.summary}</p>
+            <p className="whitespace-pre-line text-[#5b2722] text-xs">{analysisSidecar.summary}</p>
           </div>
           <Badge variant="queued">{analysisSidecar.engine}</Badge>
         </div>
@@ -843,7 +844,9 @@ const FlaggedFramesDrawerContent = ({
         <div className="flex items-start justify-between gap-2">
           <div className="space-y-0.5">
             <p className="text-[#8f5e56] text-xs">Summary</p>
-            <p className="text-[#5b2722] text-xs">{frameAnalysisSidecar.summary}</p>
+            <p className="whitespace-pre-line text-[#5b2722] text-xs">
+              {frameAnalysisSidecar.summary}
+            </p>
           </div>
           <Badge variant="queued">Local POC</Badge>
         </div>
@@ -1223,6 +1226,7 @@ const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProp
   const [ranges, setRanges] = useState<LocalRange[]>([]);
   const [isExporting, setIsExporting] = useState(false);
   const [isShowingExportOutput, setIsShowingExportOutput] = useState(false);
+  const [videoSrc, setVideoSrc] = useState<string | null>(null);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [flaggedSectionsFilter, setFlaggedSectionsFilter] = useState<FlaggedSectionsFilter>("all");
   const [currentTime, setCurrentTime] = useState(0);
@@ -1285,6 +1289,7 @@ const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProp
       setRanges([]);
       setMarkerStart(null);
       setMarkerEnd(null);
+      setVideoSrc(null);
       setPlaybackError(null);
       setCurrentTime(0);
       setDuration(0);
@@ -1305,6 +1310,33 @@ const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProp
     },
     [controller],
   );
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    setVideoSrc(null);
+    if (!videoPath) {
+      return () => {
+        isCancelled = true;
+      };
+    }
+
+    getMediaPreviewUrl(videoPath)
+      .then((previewUrl) => {
+        if (!isCancelled) {
+          setVideoSrc(previewUrl);
+        }
+      })
+      .catch(() => {
+        if (!isCancelled) {
+          setVideoSrc(convertFileSrc(videoPath));
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [videoPath]);
 
   useEffect(() => {
     if (
@@ -1756,24 +1788,30 @@ const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProp
 
           {videoPath ? (
             <div className="relative overflow-hidden rounded-[24px] border border-[#ead3c4] bg-black shadow-[0_18px_40px_rgba(0,0,0,0.12)]">
-              <video
-                key={videoPath}
-                ref={videoRef}
-                src={convertFileSrc(videoPath)}
-                playsInline
-                preload="metadata"
-                onLoadedData={() => setPlaybackError(null)}
-                onLoadedMetadata={() => setDuration(videoRef.current?.duration ?? 0)}
-                onPlay={() => setIsPlaying(true)}
-                onPause={() => setIsPlaying(false)}
-                onEnded={() => setIsPlaying(false)}
-                onTimeUpdate={() => setCurrentTime(videoRef.current?.currentTime ?? 0)}
-                onError={handleVideoError}
-                onClick={togglePlayback}
-                className="aspect-video w-full cursor-pointer bg-black"
-              >
-                <track kind="captions" />
-              </video>
+              {videoSrc ? (
+                <video
+                  key={videoSrc}
+                  ref={videoRef}
+                  src={videoSrc}
+                  playsInline
+                  preload="metadata"
+                  onLoadedData={() => setPlaybackError(null)}
+                  onLoadedMetadata={() => setDuration(videoRef.current?.duration ?? 0)}
+                  onPlay={() => setIsPlaying(true)}
+                  onPause={() => setIsPlaying(false)}
+                  onEnded={() => setIsPlaying(false)}
+                  onTimeUpdate={() => setCurrentTime(videoRef.current?.currentTime ?? 0)}
+                  onError={handleVideoError}
+                  onClick={togglePlayback}
+                  className="aspect-video w-full cursor-pointer bg-black"
+                >
+                  <track kind="captions" />
+                </video>
+              ) : (
+                <div className="flex aspect-video w-full items-center justify-center bg-black text-sm text-white/70">
+                  Preparing preview...
+                </div>
+              )}
               <SubtitleOverlay
                 currentTime={currentTime}
                 hasSubtitleSidecar={hasSubtitleSidecar}

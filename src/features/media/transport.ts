@@ -86,6 +86,11 @@ export const readTextFile = (path: string, invokeFn: InvokeFn = invoke) =>
     path,
   });
 
+export const getMediaPreviewUrl = (path: string, invokeFn: InvokeFn = invoke) =>
+  invokeFn<string>("get_media_preview_url", {
+    path,
+  });
+
 export const subscribeToTaskEvents = async (
   onEvent: (event: TaskEvent) => void,
   listenFn: ListenFn = listen,

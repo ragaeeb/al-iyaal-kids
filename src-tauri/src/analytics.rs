@@ -339,7 +339,7 @@ pub fn record_task_completion(
 
 #[cfg(test)]
 mod tests {
-    use std::{path::PathBuf, sync::Arc};
+    use std::{fs, path::PathBuf, sync::Arc};
 
     use uuid::Uuid;
 
@@ -422,6 +422,36 @@ mod tests {
         assert_eq!(snapshot.totals.total_flag_jobs, 1);
         assert_eq!(snapshot.totals.total_flagged_items, 3);
         assert_eq!(snapshot.totals.total_files_with_flags, 1);
+    }
+
+    #[test]
+    fn should_load_analytics_records_written_before_flag_counters_existed() {
+        let base_dir = temp_path();
+        let path = analytics_store_path_from_dir(&base_dir);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            r#"{
+                "records": [{
+                    "taskKind": "transcription",
+                    "jobCount": 1,
+                    "successCount": 1,
+                    "failedCount": 0,
+                    "cancelledCount": 0,
+                    "processingMinutes": 2,
+                    "completedAtEpochSeconds": 1
+                }]
+            }"#,
+        )
+        .unwrap();
+
+        let store = read_store(&path).unwrap();
+        let snapshot = snapshot_from_store(&store);
+
+        assert_eq!(snapshot.recent_runs, 1);
+        assert_eq!(snapshot.totals.total_transcription_jobs, 1);
+        assert_eq!(snapshot.totals.total_flagged_items, 0);
+        assert_eq!(snapshot.totals.total_files_with_flags, 0);
     }
 
     #[test]

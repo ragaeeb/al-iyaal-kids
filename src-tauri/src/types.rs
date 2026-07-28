@@ -278,7 +278,9 @@ pub struct AnalyticsWorkRecord {
     pub success_count: usize,
     pub failed_count: usize,
     pub cancelled_count: usize,
+    #[serde(default)]
     pub flagged_item_count: usize,
+    #[serde(default)]
     pub flagged_file_count: usize,
     pub processing_minutes: u64,
     pub completed_at_epoch_seconds: u64,

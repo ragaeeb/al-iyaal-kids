@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from collections import deque
 import os
 from pathlib import Path
 import shutil
@@ -24,6 +25,48 @@ from .events import (
 
 EmitEvent = Callable[[dict[str, object]], None]
 ShouldCancel = Callable[[], bool]
+
+
+def _ffmpeg_progress_seconds(line: str) -> float | None:
+    key, separator, raw_value = line.strip().partition("=")
+    if separator != "=" or key != "out_time_us":
+        return None
+    try:
+        return max(0.0, float(raw_value) / 1_000_000)
+    except ValueError:
+        return None
+
+
+def _run_ffmpeg_slice_with_progress(
+    command: list[str],
+    duration_seconds: float,
+    on_progress: Callable[[float], None],
+) -> subprocess.CompletedProcess[str]:
+    process = subprocess.Popen(  # noqa: S603
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    stdout_pipe = process.stdout
+    if stdout_pipe is None:
+        return subprocess.CompletedProcess(
+            command,
+            1,
+            "",
+            "ffmpeg progress stream unavailable",
+        )
+
+    recent_output: deque[str] = deque(maxlen=100)
+    for line in stdout_pipe:
+        recent_output.append(line)
+        progress_seconds = _ffmpeg_progress_seconds(line)
+        if progress_seconds is not None:
+            on_progress(min(1.0, progress_seconds / duration_seconds))
+
+    return_code = process.wait()
+    output = "".join(recent_output)
+    return subprocess.CompletedProcess(command, return_code, "", output)
 
 
 def _is_valid_range(cut_range: CutRange) -> bool:
@@ -92,6 +135,7 @@ def process_cut_job(
     try:
         slice_paths: list[Path] = []
         total_ranges = len(command.ranges)
+        max_progress = 5
         for index, cut_range in enumerate(command.ranges):
             if should_cancel():
                 emit_task_done(emit, task_id, "cut", ok=0, failed=0, cancelled=1)
@@ -109,11 +153,18 @@ def process_cut_job(
                 duration_seconds=duration,
                 compression_preset=command.compression_preset,
             )
-            slice_result = subprocess.run(  # noqa: S603
+
+            def emit_slice_progress(ratio: float) -> None:
+                nonlocal max_progress
+                progress = 5 + int(((index + ratio) / total_ranges) * 75)
+                if progress > max_progress:
+                    max_progress = progress
+                    emit_task_job_progress(emit, task_id, "cut", job_id, progress)
+
+            slice_result = _run_ffmpeg_slice_with_progress(
                 slice_command,
-                check=False,
-                capture_output=True,
-                text=True,
+                duration,
+                emit_slice_progress,
             )
             if slice_result.returncode != 0:
                 emit_task_job_error(
@@ -128,7 +179,9 @@ def process_cut_job(
 
             slice_paths.append(slice_path)
             progress = 5 + int(((index + 1) / total_ranges) * 75)
-            emit_task_job_progress(emit, task_id, "cut", job_id, progress)
+            if progress > max_progress:
+                max_progress = progress
+                emit_task_job_progress(emit, task_id, "cut", job_id, progress)
 
         if len(slice_paths) == 1:
             shutil.move(str(slice_paths[0]), str(output_path))

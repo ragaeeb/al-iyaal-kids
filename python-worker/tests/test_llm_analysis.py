@@ -1,9 +1,12 @@
 import json
+from email.message import Message
+from urllib.error import HTTPError
 
 from al_iyaal_worker.moderation.llm import (
     _build_analysis_prompt,
     _enrich_flagged_items,
     _parse_llm_json,
+    _post_json,
     _validate_priority,
     describe_llm_request,
 )
@@ -71,7 +74,7 @@ def test_should_describe_gemini_fast_request_config() -> None:
     request_config = describe_llm_request({"analysisStrategy": "fast", "engine": "gemini"})
 
     assert request_config.engine == "gemini"
-    assert request_config.model == "gemini-3.5-flash"
+    assert request_config.model == "gemini-3.6-flash"
     assert "generativelanguage.googleapis.com" in request_config.endpoint
     assert request_config.strategy == "fast"
 
@@ -124,3 +127,68 @@ def test_should_normalize_invalid_priority_to_medium() -> None:
     assert _validate_priority("") == "medium"
     assert _validate_priority(None) == "medium"
     assert _validate_priority(" HIGH ") == "high"
+
+
+class StubResponse:
+    def __init__(self, payload: dict[str, object]) -> None:
+        self.payload = payload
+
+    def __enter__(self) -> "StubResponse":
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return json.dumps(self.payload).encode("utf-8")
+
+
+def test_should_retry_transient_llm_http_errors() -> None:
+    attempts = 0
+    delays: list[float] = []
+
+    def urlopen_with_transient_failures(_request: object, timeout: float) -> StubResponse:
+        nonlocal attempts
+        attempts += 1
+        assert timeout == 600.0
+        if attempts < 3:
+            raise HTTPError(
+                "https://example.test",
+                503,
+                "Service Unavailable",
+                Message(),
+                None,
+            )
+        return StubResponse({"ok": True})
+
+    result = _post_json(
+        "https://example.test",
+        {"prompt": "test"},
+        {},
+        urlopen_fn=urlopen_with_transient_failures,
+        sleep_fn=delays.append,
+    )
+
+    assert result == {"ok": True}
+    assert attempts == 3
+    assert delays == [1.0, 2.0]
+
+
+def test_should_not_retry_permanent_llm_http_errors() -> None:
+    attempts = 0
+
+    def urlopen_with_client_error(_request: object, timeout: float) -> StubResponse:
+        nonlocal attempts
+        attempts += 1
+        raise HTTPError("https://example.test", 400, "Bad Request", Message(), None)
+
+    with pytest.raises(HTTPError, match="HTTP Error 400"):
+        _post_json(
+            "https://example.test",
+            {"prompt": "test"},
+            {},
+            urlopen_fn=urlopen_with_client_error,
+            sleep_fn=lambda _delay: None,
+        )
+
+    assert attempts == 1

@@ -107,6 +107,9 @@ def build_ffmpeg_slice_command(
         str(video_path),
         "-t",
         str(duration_seconds),
+        "-progress",
+        "pipe:1",
+        "-nostats",
         *_compression_args(compression_preset),
         str(output_path),
     ]

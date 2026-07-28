@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import json
+import time
 from bisect import bisect_left
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
-from urllib import parse, request
+from urllib import error, parse, request
 
 from ..subtitles import SubtitleEntry
 
 GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 NOVA_API_URL = "https://api.nova.amazon.com/v1/chat/completions"
+RETRYABLE_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
+LLM_REQUEST_MAX_ATTEMPTS = 3
 
 ANALYZE_PROMPT = """You are analyzing subtitle content for a children's video to identify inappropriate material.
 
@@ -157,6 +161,8 @@ def _post_json(
     payload: dict[str, Any],
     headers: dict[str, str],
     timeout_seconds: float = 600.0,
+    urlopen_fn: Callable[..., Any] = request.urlopen,
+    sleep_fn: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
     parsed = parse.urlparse(url)
     if parsed.scheme not in {"http", "https"}:
@@ -166,8 +172,17 @@ def _post_json(
     request_headers = {"Content-Type": "application/json", **headers}
     http_request = request.Request(url, data=body, headers=request_headers, method="POST")
 
-    with request.urlopen(http_request, timeout=timeout_seconds) as response:
-        return json.loads(response.read().decode("utf-8"))
+    for attempt in range(LLM_REQUEST_MAX_ATTEMPTS):
+        try:
+            with urlopen_fn(http_request, timeout=timeout_seconds) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except error.HTTPError as http_error:
+            is_last_attempt = attempt == LLM_REQUEST_MAX_ATTEMPTS - 1
+            if http_error.code not in RETRYABLE_HTTP_STATUS_CODES or is_last_attempt:
+                raise
+            sleep_fn(float(2**attempt))
+
+    raise RuntimeError("LLM request exhausted all attempts.")
 
 
 def _resolve_strategy(settings: dict[str, Any]) -> str:
@@ -176,7 +191,7 @@ def _resolve_strategy(settings: dict[str, Any]) -> str:
 
 
 def _gemini_model_for_strategy(strategy: str) -> str:
-    return "gemini-2.5-pro" if strategy == "deep" else "gemini-3.5-flash"
+    return "gemini-2.5-pro" if strategy == "deep" else "gemini-3.6-flash"
 
 
 def _nova_model_for_strategy(strategy: str) -> str:

@@ -14,7 +14,7 @@ Last updated: May 2, 2026
 
 - Remove-music, transcription, cut export, and local frame-scan processing happen on your device.
 - Moderation settings and provider API keys are stored locally in app data.
-- Temporary/runtime files may be created locally to run Demucs, Python runtime assets, ffmpeg, and local vision dependencies.
+- Temporary/runtime files may be created locally to run the MLX separator, its model checkpoint, Python runtime assets, ffmpeg, and local vision dependencies.
 
 ## Optional cloud analysis
 

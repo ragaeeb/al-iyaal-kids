@@ -86,6 +86,13 @@ pub struct StartCutJobRequest {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SaveCutRangesRequest {
+    pub video_path: String,
+    pub ranges: Vec<CutRange>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ScanVideoFramesRequest {
     pub video_path: String,
     pub sample_interval_seconds: Option<f32>,

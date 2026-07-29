@@ -260,7 +260,7 @@ fn ensure_runtime_python_packages(
     let import_check = Command::new(python_executable)
         .args([
             "-c",
-            "import demucs, torch, torchaudio, torchcodec", // noqa: E702
+            "import mlx, mlx_audio_separator, torch", // noqa: E702
         ])
         .output()
         .map_err(|error| format!("Failed to execute python import check: {error}"))?;

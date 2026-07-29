@@ -23,7 +23,7 @@ Local-first Tauri v2 desktop app (macOS-first) for Muslim families to remove mus
   - quick entry points into each workflow
 - `Remove Music`
   - folder-based `.mp4` / `.mov` processing
-  - Demucs vocals extraction + ffmpeg remux
+  - BS-RoFormer-SW vocals extraction through Apple MLX + ffmpeg remux
   - outputs to `audio_replaced/`
 - `Edit Video`
   - single-video review surface for subtitles, subtitle analysis, local frame scans, and cut export
@@ -76,7 +76,7 @@ Notes:
 - fab-ui via shadcn registries, built on Base UI primitives
 - Bun for package management, scripts, and tests
 - Biome for linting and formatting
-- Python worker sidecar for Demucs, ffmpeg, STT, moderation, and local frame scans
+- Python worker sidecar for MLX vocal separation, ffmpeg, STT, moderation, and local frame scans
 
 ## Repository layout
 
@@ -199,6 +199,7 @@ Useful checks:
 
 - a local Python runtime is bootstrapped under app data on first run
 - runtime installs are driven from `python-worker/requirements.lock.txt`
+- music removal requires Apple Silicon and downloads the BS-RoFormer-SW checkpoint into the app-managed runtime on first use; it converts and caches MLX safetensors for subsequent runs
 - analytics history persists locally under app data
 - local frame scan may install `mlx-vlm` and `torchvision` into the managed runtime on first use
 - the current local frame-scan POC requires Apple Silicon because it relies on MLX-backed captioning
@@ -206,7 +207,7 @@ Useful checks:
   - `AIYAAL_PYTHON_PATH`
   - `AIYAAL_BASE_PYTHON`
   - `AIYAAL_FFMPEG_PATH`
-  - `AIYAAL_DEMUCS_PATH`
+  - `AIYAAL_MLX_MODEL_DIR`
   - `AIYAAL_YAP_PATH`
 
 ## macOS signing and notarization

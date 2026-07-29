@@ -1,7 +1,5 @@
 # App-managed runtime bootstrap installs only the core worker stack from this file.
 # Keep local frame-scan vision packages on-demand in src-tauri/src/vision.rs.
-better-profanity
-demucs
-torch==2.10.0
-torchaudio==2.10.0
-torchcodec
+better-profanity==0.7.0
+mlx-audio-separator==0.1.5
+torch==2.13.0

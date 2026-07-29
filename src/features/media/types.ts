@@ -65,6 +65,11 @@ export type StartCutJobRequest = {
   compressionPreset: CompressionPreset;
 };
 
+export type SaveCutRangesRequest = {
+  videoPath: string;
+  ranges: CutRange[];
+};
+
 export type ScanVideoFramesRequest = {
   videoPath: string;
   sampleIntervalSeconds?: number;

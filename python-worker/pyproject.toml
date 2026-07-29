@@ -1,14 +1,14 @@
 [project]
 name = "al-iyaal-worker"
 version = "0.1.0"
-description = "Demucs worker sidecar for al-iyaal kids Tauri app"
+description = "MLX audio worker sidecar for al-iyaal kids Tauri app"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=8.4.0"]
-runtime = ["better-profanity", "demucs", "mlx-vlm==0.4.4", "torch==2.10.0", "torchaudio==2.10.0", "torchcodec"]
+runtime = ["better-profanity==0.7.0", "mlx-audio-separator==0.1.5", "mlx-vlm==0.6.4", "torch==2.13.0"]
 
 [tool.pytest.ini_options]
 addopts = "-q"

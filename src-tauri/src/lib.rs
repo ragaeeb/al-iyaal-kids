@@ -93,6 +93,7 @@ pub fn run() {
             commands::get_analytics_snapshot,
             commands::get_moderation_settings,
             commands::save_moderation_settings,
+            commands::save_cut_ranges,
             commands::read_text_file,
             commands::get_media_preview_url,
             commands::trash_file,

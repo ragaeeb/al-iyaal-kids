@@ -9,6 +9,7 @@ import type {
   FrameAnalysisResponse,
   FrameScanEvent,
   ModerationSettings,
+  SaveCutRangesRequest,
   ScanVideoFramesRequest,
   SrtListItem,
   StartCutJobRequest,
@@ -55,6 +56,11 @@ export const startFlagBatch = (request: StartFlagBatchRequest, invokeFn: InvokeF
 
 export const startCutJob = (request: StartCutJobRequest, invokeFn: InvokeFn = invoke) =>
   invokeFn<CutJobStartedResponse>("start_cut_job", {
+    request,
+  });
+
+export const saveCutRanges = (request: SaveCutRangesRequest, invokeFn: InvokeFn = invoke) =>
+  invokeFn<{ success: boolean }>("save_cut_ranges", {
     request,
   });
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { buildSuggestedCutRanges } from "@/features/editor/ranges";
+import { buildSuggestedCutRanges, parseSavedCutRanges } from "@/features/editor/ranges";
 import type { FlaggedSegment } from "@/features/media/types";
 
 describe("buildSuggestedCutRanges", () => {
@@ -33,5 +33,18 @@ describe("buildSuggestedCutRanges", () => {
         start: "0:04",
       },
     ]);
+  });
+});
+
+describe("parseSavedCutRanges", () => {
+  it("should restore valid persisted cut ranges", () => {
+    expect(parseSavedCutRanges('{"ranges":[{"start":"1.500","end":"3.750"}]}')).toEqual([
+      { end: "3.750", start: "1.500" },
+    ]);
+  });
+
+  it("should ignore malformed and invalid persisted ranges", () => {
+    expect(parseSavedCutRanges('{"ranges":[{"start":"4","end":"2"},{}]}')).toEqual([]);
+    expect(parseSavedCutRanges("not json")).toEqual([]);
   });
 });

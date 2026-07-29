@@ -42,3 +42,43 @@ export const parseRangeInput = (value: string): CutRange[] => {
     start: match[1] ?? "0:00",
   }));
 };
+
+export const parseSavedCutRanges = (value: string): CutRange[] => {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!parsed || typeof parsed !== "object" || !("ranges" in parsed)) {
+      return [];
+    }
+
+    const { ranges } = parsed;
+    if (!Array.isArray(ranges)) {
+      return [];
+    }
+
+    return ranges.flatMap((range) => {
+      if (!range || typeof range !== "object" || !("start" in range) || !("end" in range)) {
+        return [];
+      }
+
+      const { end, start } = range;
+      if (typeof start !== "string" || typeof end !== "string") {
+        return [];
+      }
+
+      const startSeconds = Number(start);
+      const endSeconds = Number(end);
+      if (
+        !Number.isFinite(startSeconds) ||
+        !Number.isFinite(endSeconds) ||
+        startSeconds < 0 ||
+        endSeconds <= startSeconds
+      ) {
+        return [];
+      }
+
+      return [{ end, start }];
+    });
+  } catch {
+    return [];
+  }
+};

@@ -2,7 +2,7 @@
 
 Persistent Python worker process used by the Tauri backend for:
 
-- remove-music jobs via Demucs and ffmpeg
+- remove-music jobs via BS-RoFormer-SW through MLX and ffmpeg
 - local subtitle generation
 - subtitle moderation
 - local frame scans that write `.frames.analysis.json` sidecars

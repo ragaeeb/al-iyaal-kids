@@ -22,10 +22,10 @@ use crate::{
         AnalyticsSnapshot, BatchEvent, BatchStartedResponse, BatchState, BatchStatus, CancelAck,
         CancelBatchRequest, CancelTaskRequest, CutJobStartedResponse, FrameAnalysisResponse,
         JobRecord, JobStatus, ListSrtFilesRequest, ListVideosRequest, ModerationRule,
-        ModerationSettings, SaveAck, ScanVideoFramesRequest, SrtListItem, StartBatchRequest,
-        StartCutJobRequest, StartFlagBatchRequest, StartTranscriptionBatchRequest, TaskCancelAck,
-        TaskJobRecord, TaskJobStatus, TaskKind, TaskState, TaskStatus, VideoListItem,
-        WorkerStatusKind,
+        ModerationSettings, SaveAck, SaveCutRangesRequest, ScanVideoFramesRequest, SrtListItem,
+        StartBatchRequest, StartCutJobRequest, StartFlagBatchRequest,
+        StartTranscriptionBatchRequest, TaskCancelAck, TaskJobRecord, TaskJobStatus, TaskKind,
+        TaskState, TaskStatus, VideoListItem, WorkerStatusKind,
     },
     vision,
     worker::ensure_worker_sender,
@@ -130,7 +130,13 @@ fn is_allowed_text_sidecar_path(path: &Path) -> bool {
         .and_then(|value| value.to_str())
         .map(|value| value.to_ascii_lowercase());
 
-    matches!(extension.as_deref(), Some("srt")) || file_name.ends_with(".analysis.json")
+    matches!(extension.as_deref(), Some("srt"))
+        || file_name.ends_with(".analysis.json")
+        || file_name.ends_with(".ranges.json")
+}
+
+fn cut_ranges_sidecar_path(video_path: &Path) -> PathBuf {
+    video_path.with_extension("ranges.json")
 }
 
 fn is_allowed_preview_video_path(path: &Path) -> bool {
@@ -157,7 +163,9 @@ fn validate_read_text_file_path(path: &str) -> Result<PathBuf, String> {
     }
 
     if !is_allowed_text_sidecar_path(&canonical) {
-        return Err("Only .srt and .analysis.json sidecar files can be read.".to_string());
+        return Err(
+            "Only .srt, .analysis.json, and .ranges.json sidecar files can be read.".to_string(),
+        );
     }
 
     Ok(canonical)
@@ -658,6 +666,25 @@ pub async fn read_text_file(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+pub async fn save_cut_ranges(request: SaveCutRangesRequest) -> Result<SaveAck, String> {
+    let video_path = validate_preview_video_path(&request.video_path)?;
+    let sidecar_path = cut_ranges_sidecar_path(&video_path);
+    let content = serde_json::to_string_pretty(&serde_json::json!({ "ranges": request.ranges }))
+        .map_err(|error| format!("Failed serializing cut ranges: {error}"))?;
+
+    tokio_fs::write(&sidecar_path, content)
+        .await
+        .map_err(|error| {
+            format!(
+                "Failed saving cut ranges {}: {error}",
+                sidecar_path.display()
+            )
+        })?;
+
+    Ok(SaveAck { success: true })
+}
+
+#[tauri::command]
 pub async fn get_media_preview_url(path: String) -> Result<String, String> {
     let validated_path = validate_preview_video_path(&path)?;
     crate::media_preview::register_media_preview_path(validated_path)
@@ -696,14 +723,15 @@ pub async fn open_folder_picker(app: AppHandle) -> Result<Option<String>, String
 #[cfg(test)]
 mod tests {
     use super::{
-        create_task_jobs, default_moderation_settings, ensure_supported_cancel_mode,
-        ensure_supported_compression_preset, ensure_supported_cut_output_mode,
-        ensure_supported_frame_scan_interval, ensure_supported_output_mode,
-        ensure_supported_yap_mode, get_batch_state_inner, get_task_state_inner,
-        require_worker_sender, resolve_input_paths, validate_existing_file_path,
-        validate_preview_video_path, validate_read_text_file_path,
+        create_task_jobs, cut_ranges_sidecar_path, default_moderation_settings,
+        ensure_supported_cancel_mode, ensure_supported_compression_preset,
+        ensure_supported_cut_output_mode, ensure_supported_frame_scan_interval,
+        ensure_supported_output_mode, ensure_supported_yap_mode, get_batch_state_inner,
+        get_task_state_inner, require_worker_sender, resolve_input_paths, save_cut_ranges,
+        validate_existing_file_path, validate_preview_video_path, validate_read_text_file_path,
     };
-    use crate::state::AppState;
+    use crate::{state::AppState, types::SaveCutRangesRequest};
+    use std::path::Path;
     use uuid::Uuid;
 
     #[test]
@@ -767,7 +795,56 @@ mod tests {
 
         let error = validate_read_text_file_path(path.to_string_lossy().as_ref()).unwrap_err();
 
-        assert!(error.contains(".srt and .analysis.json"));
+        assert!(error.contains(".srt, .analysis.json, and .ranges.json"));
+
+        std::fs::remove_dir_all(base_dir).unwrap();
+    }
+
+    #[test]
+    fn should_build_a_ranges_sidecar_path_from_a_video_path() {
+        assert_eq!(
+            cut_ranges_sidecar_path(Path::new("/tmp/episode.clip.mp4")),
+            Path::new("/tmp/episode.clip.ranges.json")
+        );
+    }
+
+    #[test]
+    fn should_allow_reading_ranges_sidecars() {
+        let base_dir =
+            std::env::temp_dir().join(format!("al-iyaal-read-sidecar-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&base_dir).unwrap();
+        let path = base_dir.join("episode.ranges.json");
+        std::fs::write(&path, "{\"ranges\":[]}").unwrap();
+
+        let validated = validate_read_text_file_path(path.to_string_lossy().as_ref()).unwrap();
+
+        assert_eq!(validated, path.canonicalize().unwrap());
+
+        std::fs::remove_dir_all(base_dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn should_save_cut_ranges_as_a_video_sidecar() {
+        let base_dir =
+            std::env::temp_dir().join(format!("al-iyaal-save-ranges-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&base_dir).unwrap();
+        let video_path = base_dir.join("episode.mp4");
+        std::fs::write(&video_path, "video").unwrap();
+
+        save_cut_ranges(SaveCutRangesRequest {
+            video_path: video_path.to_string_lossy().to_string(),
+            ranges: vec![crate::types::CutRange {
+                end: "3.500".to_string(),
+                start: "1.250".to_string(),
+            }],
+        })
+        .await
+        .unwrap();
+
+        let content = std::fs::read_to_string(base_dir.join("episode.ranges.json")).unwrap();
+        let saved: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(saved["ranges"][0]["start"], "1.250");
+        assert_eq!(saved["ranges"][0]["end"], "3.500");
 
         std::fs::remove_dir_all(base_dir).unwrap();
     }

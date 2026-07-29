@@ -38,7 +38,7 @@ Do not describe the app as fully offline: subtitle moderation can use opt-in clo
 
 - Remove Music
   - folder-based `.mp4` / `.mov` processing
-  - Demucs vocals extraction + ffmpeg remux
+  - BS-RoFormer-SW MLX vocals extraction + ffmpeg remux
   - outputs to `audio_replaced/`
 - Edit Video
   - current shell entry point for subtitle generation, subtitle review, content flagging, frame scans, and cut export
@@ -85,7 +85,7 @@ Do not describe the app as fully offline: subtitle moderation can use opt-in clo
 - Keep command construction and filesystem behavior deterministic.
 - Prefer pure helper functions for command/path logic.
 - Keep worker output JSONL schema stable.
-- Add pytest coverage for Demucs/ffmpeg command construction, error mapping, and LLM request-config helpers.
+- Add pytest coverage for MLX separator/ffmpeg command construction, error mapping, and LLM request-config helpers.
 - Flagging supports both:
   - video inputs (uses `<video>.srt` sidecar)
   - direct `.srt` inputs (writes sibling `.analysis.json`)
@@ -119,7 +119,7 @@ When debugging failures or stalls:
 - verify UI worker status messages and drawer log panels
 - confirm runtime paths:
   - Python venv under app data runtime dir
-  - ffmpeg/demucs/yap resolution via env overrides when needed
+  - ffmpeg/MLX model/yap resolution via env overrides when needed
 - for playback issues, check:
   - `ffprobe` output
   - asset protocol path handling (`convertFileSrc` flow)

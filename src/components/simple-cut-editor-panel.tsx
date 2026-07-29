@@ -7,6 +7,7 @@ import {
   LoaderCircle,
   Pause,
   Play,
+  RotateCcw,
   Scissors,
   ShieldAlert,
   Trash2,
@@ -20,11 +21,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DrawerClose } from "@/components/ui/drawer";
 import { trashFile } from "@/features/batch/transport";
+import { parseSavedCutRanges } from "@/features/editor/ranges";
 import { findSubtitleAtTime, formatTime, parseSrt } from "@/features/editor/subtitles";
+import { canResetVideoToOriginal } from "@/features/editor/video-reset";
 import {
   buildVideoDeleteTargets,
   isMissingDeleteTargetError,
   toAnalysisSidecarPath,
+  toCutRangesSidecarPath,
   toFrameAnalysisSidecarPath,
   toSrtSidecarPath,
 } from "@/features/editor/video-sidecars";
@@ -33,6 +37,7 @@ import { getLatestTask, getTaskOutputPath } from "@/features/media/selectors";
 import {
   getMediaPreviewUrl,
   readTextFile,
+  saveCutRanges,
   scanVideoFrames,
   subscribeToFrameScanEvents,
 } from "@/features/media/transport";
@@ -108,6 +113,13 @@ const toCutRanges = (ranges: LocalRange[]): CutRange[] => {
     start: toTimeToken(range.start),
   }));
 };
+
+const toLocalRanges = (ranges: CutRange[]): LocalRange[] =>
+  ranges.map((range, index) => ({
+    end: Number(range.end),
+    id: `${range.start}-${range.end}-${index}`,
+    start: Number(range.start),
+  }));
 
 const deleteVideoFiles = async (videoPath: string): Promise<void> => {
   const deleteTargets = buildVideoDeleteTargets(videoPath);
@@ -207,8 +219,8 @@ const DeleteVideoConfirmationCard = ({
   <div className="rounded-[20px] border border-rose-300 bg-rose-50 px-4 py-3 text-rose-900 text-sm">
     <p className="font-medium">Delete the current video and its sidecars?</p>
     <p className="mt-1 text-rose-800 text-xs">
-      This moves the selected video to trash, plus the matching `.srt`, `.analysis.json`, and
-      `.frames.analysis.json` files when present.
+      This moves the selected video to trash, plus the matching `.srt`, `.analysis.json`,
+      `.frames.analysis.json`, and `.ranges.json` files when present.
     </p>
     <div className="mt-3 flex flex-wrap gap-2">
       <Button type="button" variant="danger" size="sm" onClick={onConfirm}>
@@ -540,6 +552,38 @@ const useVideoSidecarLoading = (
     setHasSubtitleSidecar,
     setSubtitles,
   ]);
+};
+
+const useCutRangesSidecarLoading = (
+  videoPath: string | null,
+  setRanges: Dispatch<SetStateAction<LocalRange[]>>,
+) => {
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!videoPath) {
+      setRanges([]);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    readTextFile(toCutRangesSidecarPath(videoPath))
+      .then((content) => {
+        if (!cancelled) {
+          setRanges(toLocalRanges(parseSavedCutRanges(content)));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setRanges([]);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [videoPath, setRanges]);
 };
 
 const useFrameScanEventSubscription = (
@@ -1224,6 +1268,8 @@ const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProp
   const [markerStart, setMarkerStart] = useState<number | null>(null);
   const [markerEnd, setMarkerEnd] = useState<number | null>(null);
   const [ranges, setRanges] = useState<LocalRange[]>([]);
+  const [isSavingRanges, setIsSavingRanges] = useState(false);
+  const [rangeSaveError, setRangeSaveError] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [isShowingExportOutput, setIsShowingExportOutput] = useState(false);
   const [videoSrc, setVideoSrc] = useState<string | null>(null);
@@ -1261,6 +1307,7 @@ const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProp
   const isCutTaskActive =
     isExporting || cutTask?.status === "queued" || cutTask?.status === "running";
   const hasStartedMarking = markerStart !== null;
+  const canResetToOriginal = canResetVideoToOriginal(videoPath, selectedVideoPath);
   const cutFromLabel = `Cut from ${formatTime(
     markerStart ?? currentTime,
     Number.isFinite(duration) && duration > 0 ? duration : currentTime,
@@ -1287,6 +1334,8 @@ const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProp
       setVideoPath(selected);
       setSelectedVideoPath(selected);
       setRanges([]);
+      setRangeSaveError(null);
+      setIsSavingRanges(false);
       setMarkerStart(null);
       setMarkerEnd(null);
       setVideoSrc(null);
@@ -1369,6 +1418,8 @@ const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProp
     setSubtitles,
   );
 
+  useCutRangesSidecarLoading(videoPath, setRanges);
+
   useEffect(() => {
     if (!sidecarTaskRefreshSignature) {
       return;
@@ -1423,6 +1474,14 @@ const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProp
     const selectedPath = toPathList(response as string | string[] | null).at(0) ?? null;
     const selected = selectedPath ? normalizeDialogPath(selectedPath) : null;
     applySelectedVideoPath(selected);
+  };
+
+  const resetToOriginalVideo = () => {
+    if (!selectedVideoPath) {
+      return;
+    }
+
+    applySelectedVideoPath(selectedVideoPath);
   };
 
   const handleVideoError = () => {
@@ -1493,6 +1552,22 @@ const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProp
       await controller.startCut(videoPath, toCutRanges(ranges), compressionPreset);
     } finally {
       setIsExporting(false);
+    }
+  };
+
+  const saveSelectedRanges = async () => {
+    if (!videoPath) {
+      return;
+    }
+
+    setRangeSaveError(null);
+    setIsSavingRanges(true);
+    try {
+      await saveCutRanges({ ranges: toCutRanges(ranges), videoPath });
+    } catch (error) {
+      setRangeSaveError(toUnknownErrorMessage(error, "Failed saving cut ranges."));
+    } finally {
+      setIsSavingRanges(false);
     }
   };
 
@@ -1710,6 +1785,12 @@ const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProp
               <Film className="size-3" />
               Choose Video
             </Button>
+            {canResetToOriginal ? (
+              <Button type="button" variant="secondary" size="sm" onClick={resetToOriginalVideo}>
+                <RotateCcw className="size-3" />
+                Reset to Original
+              </Button>
+            ) : null}
             <Button
               type="button"
               variant="secondary"
@@ -1756,6 +1837,16 @@ const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProp
               {isCutTaskActive ? <LoaderCircle className="size-3 animate-spin" /> : null}
               {isCutTaskActive ? "Exporting..." : "Export"}
             </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={saveSelectedRanges}
+              disabled={!videoPath || isSavingRanges}
+            >
+              {isSavingRanges ? <LoaderCircle className="size-3 animate-spin" /> : null}
+              {isSavingRanges ? "Saving Ranges..." : "Save Ranges"}
+            </Button>
             {isCutTaskActive ? (
               <Button
                 type="button"
@@ -1777,6 +1868,8 @@ const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProp
               Delete Video
             </Button>
           </div>
+
+          {rangeSaveError ? <p className="text-[#b5453d] text-xs">{rangeSaveError}</p> : null}
 
           {isDeleteConfirmOpen ? (
             <DeleteVideoConfirmationCard

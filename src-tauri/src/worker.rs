@@ -100,7 +100,10 @@ async fn spawn_worker_process(
         .parent()
         .map(PathBuf::from)
         .ok_or_else(|| "Failed to resolve Python venv bin directory.".to_string())?;
-    let demucs_path = venv_bin_dir.join("demucs");
+    let mlx_model_dir = venv_bin_dir
+        .parent()
+        .ok_or_else(|| "Failed to resolve Python venv directory.".to_string())?
+        .join("models");
     let merged_path = match env::var("PATH") {
         Ok(existing) if !existing.is_empty() => {
             format!("{}:{existing}", venv_bin_dir.to_string_lossy())
@@ -118,8 +121,8 @@ async fn spawn_worker_process(
         .env("PYTHONPATH", merged_python_path)
         .env("PATH", merged_path)
         .env(
-            "AIYAAL_DEMUCS_PATH",
-            demucs_path.to_string_lossy().to_string(),
+            "AIYAAL_MLX_MODEL_DIR",
+            mlx_model_dir.to_string_lossy().to_string(),
         )
         .env(
             "AIYAAL_FFMPEG_PATH",
@@ -339,7 +342,9 @@ mod tests {
     #[test]
     fn should_treat_tracebacks_as_worker_errors() {
         assert!(is_worker_stderr_error("Traceback (most recent call last):"));
-        assert!(is_worker_stderr_error("demucs failed with exit code 1"));
+        assert!(is_worker_stderr_error(
+            "BS-RoFormer-SW MLX separation failed"
+        ));
     }
 
     #[test]

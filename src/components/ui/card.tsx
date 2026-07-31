@@ -1,4 +1,4 @@
-import type { HTMLAttributes } from "react";
+import { forwardRef, type HTMLAttributes } from "react";
 
 import { cn } from "@/lib/cn";
 
@@ -6,17 +6,22 @@ type CardProps = HTMLAttributes<HTMLDivElement> & {
   size?: "default" | "sm";
 };
 
-const Card = ({ className, size = "default", ...props }: CardProps) => (
-  <div
-    data-size={size}
-    data-slot="card"
-    className={cn(
-      "flex flex-col gap-1.5 rounded-[20px] border border-[#ead3c4] bg-[linear-gradient(180deg,rgba(255,251,248,0.96),rgba(255,246,240,0.92))] py-2.5 text-[#4f1f1a] text-xs shadow-[0_12px_28px_rgba(136,50,45,0.08)] data-[size=sm]:gap-1 data-[size=sm]:py-2",
-      className,
-    )}
-    {...props}
-  />
+const Card = forwardRef<HTMLDivElement, CardProps>(
+  ({ className, size = "default", ...props }, ref) => (
+    <div
+      ref={ref}
+      data-size={size}
+      data-slot="card"
+      className={cn(
+        "flex flex-col gap-1.5 rounded-[20px] border border-[#ead3c4] bg-[linear-gradient(180deg,rgba(255,251,248,0.96),rgba(255,246,240,0.92))] py-2.5 text-[#4f1f1a] text-xs shadow-[0_12px_28px_rgba(136,50,45,0.08)] data-[size=sm]:gap-1 data-[size=sm]:py-2",
+        className,
+      )}
+      {...props}
+    />
+  ),
 );
+
+Card.displayName = "Card";
 
 const CardHeader = ({ className, ...props }: HTMLAttributes<HTMLDivElement>) => (
   <div

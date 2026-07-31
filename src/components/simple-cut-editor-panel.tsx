@@ -1678,7 +1678,12 @@ const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProp
   };
 
   return (
-    <Card>
+    <Card
+      ref={dropTargetRef}
+      className={`transition ${
+        isDropTargetActive ? "bg-[#fff1e8] shadow-[0_0_0_2px_rgba(197,114,103,0.28)]" : ""
+      }`}
+    >
       <CardHeader className="grid grid-cols-[1fr_auto] gap-2">
         <div>
           <CardTitle className="flex items-center gap-1.5">
@@ -1772,14 +1777,7 @@ const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProp
         </TaskDrawer>
       </CardHeader>
       <CardContent>
-        <div
-          ref={dropTargetRef}
-          className={`space-y-2 rounded-[16px] transition ${
-            isDropTargetActive
-              ? "bg-[#fff1e8] shadow-[0_0_0_2px_rgba(197,114,103,0.15)]"
-              : "bg-transparent"
-          }`}
-        >
+        <div className="space-y-2">
           <div className="flex flex-wrap gap-1.5">
             <Button type="button" variant="secondary" size="sm" onClick={chooseVideo}>
               <Film className="size-3" />

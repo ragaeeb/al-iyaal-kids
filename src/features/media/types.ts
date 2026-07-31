@@ -70,28 +70,9 @@ export type SaveCutRangesRequest = {
   ranges: CutRange[];
 };
 
-export type ScanVideoFramesRequest = {
-  videoPath: string;
-  sampleIntervalSeconds?: number;
-};
-
 export type CutJobStartedResponse = {
   taskId: string;
   videoPath: string;
-};
-
-export type FrameAnalysisResponse = {
-  outputPath: string;
-  flaggedCount: number;
-  summary: string;
-};
-
-export type FrameScanEvent = {
-  videoPath: string;
-  stage: string;
-  message: string;
-  current?: number;
-  total?: number;
 };
 
 export type CancelTaskRequest = {

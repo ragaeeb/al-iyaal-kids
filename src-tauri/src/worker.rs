@@ -19,6 +19,14 @@ use crate::{
 
 const BATCH_EVENT_NAME: &str = "batch-event";
 const TASK_EVENT_NAME: &str = "task-event";
+pub const SYSTEM_LOG_EVENT_NAME: &str = "system-log-line";
+
+async fn record_log(app: &AppHandle, state: &AppState, message: impl Into<String>) {
+    let msg = message.into();
+    eprintln!("{msg}");
+    state.push_log_line(msg.clone()).await;
+    let _ = app.emit(SYSTEM_LOG_EVENT_NAME, msg);
+}
 
 fn is_worker_stderr_error(line: &str) -> bool {
     let normalized = line.trim().to_ascii_lowercase();
@@ -157,13 +165,14 @@ async fn spawn_worker_process(
     let (tx, mut rx) = mpsc::unbounded_channel::<WorkerCommand>();
 
     let app_for_stdin = app.clone();
+    let state_for_stdin = state.clone();
     tauri::async_runtime::spawn(async move {
         let mut stdin = stdin;
         while let Some(command) = rx.recv().await {
             let line = match command.to_json_line() {
                 Ok(value) => value,
                 Err(error) => {
-                    eprintln!("worker command serialization error: {error}");
+                    record_log(&app_for_stdin, &state_for_stdin, format!("worker command serialization error: {error}")).await;
                     let _ = app_for_stdin.emit(
                         BATCH_EVENT_NAME,
                         BatchEvent::worker_status(WorkerStatusKind::Error, error.clone()),
@@ -177,7 +186,7 @@ async fn spawn_worker_process(
             };
 
             if let Err(error) = stdin.write_all(line.as_bytes()).await {
-                eprintln!("worker stdin write error: {error}");
+                record_log(&app_for_stdin, &state_for_stdin, format!("worker stdin write error: {error}")).await;
                 let _ = app_for_stdin.emit(
                     BATCH_EVENT_NAME,
                     BatchEvent::worker_status(
@@ -203,11 +212,11 @@ async fn spawn_worker_process(
         let mut reader = BufReader::new(stdout).lines();
 
         while let Ok(Some(line)) = reader.next_line().await {
-            eprintln!("worker stdout: {line}");
+            record_log(&app_for_stdout, &state_for_stdout, format!("worker stdout: {line}")).await;
             let parsed_event = match parse_worker_event(&line) {
                 Ok(event) => event,
                 Err(error) => {
-                    eprintln!("worker event parse error: {error}; raw_line={line}");
+                    record_log(&app_for_stdout, &state_for_stdout, format!("worker event parse error: {error}; raw_line={line}")).await;
                     let _ = app_for_stdout.emit(
                         BATCH_EVENT_NAME,
                         BatchEvent::worker_status(WorkerStatusKind::Error, error.clone()),
@@ -234,7 +243,7 @@ async fn spawn_worker_process(
                         if let Err(error) =
                             analytics::record_batch_completion(&app_for_stdout, &batch, started_at)
                         {
-                            eprintln!("analytics batch record error: {error}");
+                            record_log(&app_for_stdout, &state_for_stdout, format!("analytics batch record error: {error}")).await;
                         }
                     }
                 }
@@ -244,7 +253,7 @@ async fn spawn_worker_process(
                         if let Err(error) =
                             analytics::record_task_completion(&app_for_stdout, &task, started_at)
                         {
-                            eprintln!("analytics task record error: {error}");
+                            record_log(&app_for_stdout, &state_for_stdout, format!("analytics task record error: {error}")).await;
                         }
                     }
                 }
@@ -254,10 +263,11 @@ async fn spawn_worker_process(
     });
 
     let app_for_stderr = app.clone();
+    let state_for_stderr = state.clone();
     tauri::async_runtime::spawn(async move {
         let mut reader = BufReader::new(stderr).lines();
         while let Ok(Some(line)) = reader.next_line().await {
-            eprintln!("worker stderr: {line}");
+            record_log(&app_for_stderr, &state_for_stderr, format!("worker stderr: {line}")).await;
             if !is_worker_stderr_error(&line) {
                 continue;
             }
@@ -309,7 +319,7 @@ async fn spawn_worker_process(
             ),
             Err(error) => (format!("Failed waiting on worker process: {error}"), true),
         };
-        eprintln!("{message}");
+        record_log(&app_for_wait, &state_for_wait, &message).await;
 
         let batch_status = if is_error {
             WorkerStatusKind::Error
@@ -342,9 +352,7 @@ mod tests {
     #[test]
     fn should_treat_tracebacks_as_worker_errors() {
         assert!(is_worker_stderr_error("Traceback (most recent call last):"));
-        assert!(is_worker_stderr_error(
-            "BS-RoFormer-SW MLX separation failed"
-        ));
+        assert!(is_worker_stderr_error("Demucs MLX separation failed"));
     }
 
     #[test]

@@ -47,6 +47,20 @@ describe("batch reducer", () => {
     expect(state.batchesById["batch-1"]?.jobs).toHaveLength(2);
   });
 
+  it("should clear stale batch state when a new batch is requested", () => {
+    const withBatch = batchReducer(createInitialBatchUiState(), {
+      payload: createBatch(),
+      type: "start_batch_success",
+    });
+
+    const state = batchReducer(withBatch, { type: "start_batch_request" });
+
+    expect(state.activeBatchId).toBeNull();
+    expect(state.batchesById).toEqual({});
+    expect(state.isStartingBatch).toBe(true);
+    expect(state.errorMessage).toBeNull();
+  });
+
   it("should apply job progress events", () => {
     const seed = batchReducer(createInitialBatchUiState(), {
       payload: createBatch(),

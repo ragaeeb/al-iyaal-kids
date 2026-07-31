@@ -28,23 +28,27 @@ pub async fn ensure_runtime_ready(app: &AppHandle) -> Result<RuntimePaths, Strin
         )
     })?;
 
+    let resource_dir = app
+        .path()
+        .resource_dir()
+        .map_err(|error| format!("Failed to resolve resources dir: {error}"))?;
+
     let worker_script = resolve_existing_path(&[
+        // Dev: relative to CWD (project root)
         PathBuf::from("python-worker/worker.py"),
         PathBuf::from("../python-worker/worker.py"),
-        app.path()
-            .resource_dir()
-            .map_err(|error| format!("Failed to resolve resources dir: {error}"))?
-            .join("python-worker/worker.py"),
+        // Prod bundle: Tauri stores ../… resources under _up_/ inside Contents/Resources
+        resource_dir.join("_up_/python-worker/worker.py"),
+        // Fallback (no _up_ prefix, kept for forward-compat)
+        resource_dir.join("python-worker/worker.py"),
     ])
     .ok_or_else(|| "Failed to locate python worker entrypoint (worker.py).".to_string())?;
 
     let requirements_lock = resolve_existing_path(&[
         PathBuf::from("python-worker/requirements.lock.txt"),
         PathBuf::from("../python-worker/requirements.lock.txt"),
-        app.path()
-            .resource_dir()
-            .map_err(|error| format!("Failed to resolve resources dir: {error}"))?
-            .join("python-worker/requirements.lock.txt"),
+        resource_dir.join("_up_/python-worker/requirements.lock.txt"),
+        resource_dir.join("python-worker/requirements.lock.txt"),
     ])
     .ok_or_else(|| "Failed to locate python worker requirements.lock.txt.".to_string())?;
 
@@ -81,25 +85,39 @@ pub async fn ensure_runtime_ready(app: &AppHandle) -> Result<RuntimePaths, Strin
     let ffmpeg_executable = env::var("AIYAAL_FFMPEG_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
+            // When launched from Finder, macOS strips PATH to /usr/bin:/bin:/usr/sbin:/sbin
+            // so tools installed via Homebrew or MacPorts are not found by name alone.
+            // Probe known install locations in priority order before falling back.
             let bundled = runtime_dir.join("bin/ffmpeg");
             if bundled.exists() {
-                bundled
-            } else {
-                PathBuf::from("ffmpeg")
+                return bundled;
             }
+            let system_candidates = [
+                PathBuf::from("/opt/homebrew/bin/ffmpeg"),  // Homebrew on Apple Silicon
+                PathBuf::from("/usr/local/bin/ffmpeg"),      // Homebrew on Intel / manual install
+                PathBuf::from("/opt/local/bin/ffmpeg"),      // MacPorts
+            ];
+            if let Some(found) = system_candidates.into_iter().find(|p| p.exists()) {
+                return found;
+            }
+            PathBuf::from("ffmpeg")
         });
 
     let yap_executable = env::var("AIYAAL_YAP_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
-            if let Some(resource_dir) = app.path().resource_dir().ok() {
-                let resource_candidates = [
-                    resource_dir.join("assets/bin/yap.sh"),
-                    resource_dir.join("assets/bin/yap"),
-                ];
-                if let Some(found) = resource_candidates.into_iter().find(|path| path.exists()) {
-                    return found;
-                }
+            // All candidates in priority order: prod bundle _up_/ first, then plain
+            // resource_dir variants, then dev-mode relative paths, then runtime dir.
+            let resource_candidates = [
+                // Prod bundle: Tauri prefixes ../ resources with _up_/
+                resource_dir.join("_up_/assets/bin/yap.sh"),
+                resource_dir.join("_up_/assets/bin/yap"),
+                // Fallback (no _up_ prefix)
+                resource_dir.join("assets/bin/yap.sh"),
+                resource_dir.join("assets/bin/yap"),
+            ];
+            if let Some(found) = resource_candidates.into_iter().find(|path| path.exists()) {
+                return found;
             }
 
             let local_candidates = [

@@ -8,7 +8,13 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=8.4.0"]
-runtime = ["better-profanity==0.7.0", "mlx-audio-separator==0.1.5", "mlx-vlm==0.6.4", "torch==2.13.0"]
+demucs-bootstrap = ["demucs-mlx[convert]==1.4.4"]
+runtime = [
+    "better-profanity==0.7.0",
+    "demucs-mlx==1.4.4",
+    "soundfile==0.13.1",
+    "torch==2.13.0",
+]
 
 [tool.pytest.ini_options]
 addopts = "-q"

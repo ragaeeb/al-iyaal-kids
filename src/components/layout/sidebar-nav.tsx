@@ -1,5 +1,6 @@
 import { ChevronLeft, ChevronRight, Home } from "lucide-react";
 
+import { SystemLogDrawer } from "@/components/system-log-drawer";
 import { type AppPage, appPages } from "@/features/app/navigation";
 import { cn } from "@/lib/cn";
 
@@ -98,6 +99,10 @@ const SidebarNav = ({
             </button>
           );
         })}
+      </div>
+
+      <div className="mt-auto border-[#ead3c4]/60 border-t pt-1.5">
+        <SystemLogDrawer isSidebarCollapsed={isCollapsed} />
       </div>
     </aside>
   );

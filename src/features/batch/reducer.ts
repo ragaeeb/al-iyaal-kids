@@ -104,6 +104,8 @@ export const batchReducer = (state: BatchUiState, action: BatchUiAction): BatchU
   if (action.type === "start_batch_request") {
     return {
       ...state,
+      activeBatchId: null,
+      batchesById: {},
       errorMessage: null,
       isStartingBatch: true,
     };

@@ -22,7 +22,7 @@ SeparatorFactory = Callable[[Path], VocalSeparator]
 
 
 def create_vocal_separator(model_dir: Path) -> VocalSeparator:
-    """Create the configured music-removal engine behind the worker-facing API."""
-    from .bs_roformer_mlx import BsRoformerMlxSeparator
+    """Create the Demucs MLX engine behind the worker-facing API."""
+    from .demucs_mlx import DemucsMlxSeparator
 
-    return BsRoformerMlxSeparator(model_dir=model_dir)
+    return DemucsMlxSeparator(model_dir=model_dir)

@@ -93,13 +93,6 @@ pub struct SaveCutRangesRequest {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ScanVideoFramesRequest {
-    pub video_path: String,
-    pub sample_interval_seconds: Option<f32>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct CancelTaskRequest {
     pub task_id: String,
     pub mode: String,
@@ -110,24 +103,6 @@ pub struct CancelTaskRequest {
 pub struct CutJobStartedResponse {
     pub task_id: String,
     pub video_path: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FrameAnalysisResponse {
-    pub output_path: String,
-    pub flagged_count: usize,
-    pub summary: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FrameScanEvent {
-    pub video_path: String,
-    pub stage: String,
-    pub message: String,
-    pub current: Option<usize>,
-    pub total: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

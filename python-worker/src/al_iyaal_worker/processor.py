@@ -56,7 +56,10 @@ def process_batch(
                     "type": "job_log",
                     "batchId": command.batch_id,
                     "jobId": job_id,
-                    "message": f"Running BS-RoFormer-SW MLX separation for {input_path.name}",
+                    "message": (
+                        f"Running {getattr(separator, 'engine_name', 'audio')} separation "
+                        f"for {input_path.name}"
+                    ),
                     "stream": "stdout",
                 }
             )
@@ -68,7 +71,7 @@ def process_batch(
                     "type": "job_error",
                     "batchId": command.batch_id,
                     "jobId": job_id,
-                    "error": f"BS-RoFormer-SW MLX separation failed: {error}",
+                    "error": f"{getattr(separator, 'engine_name', 'Audio')} separation failed: {error}",
                 }
             )
             continue

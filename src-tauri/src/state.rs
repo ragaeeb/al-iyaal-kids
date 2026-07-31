@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -13,6 +13,7 @@ use crate::{
 
 pub type WorkerSender = mpsc::UnboundedSender<crate::protocol::WorkerCommand>;
 const MAX_TASK_JOB_LOG_LINES: usize = 200;
+const MAX_SYSTEM_LOG_LINES: usize = 500;
 
 fn push_bounded_log(logs: &mut Vec<String>, message: String) {
     logs.push(message);
@@ -29,6 +30,7 @@ pub struct AppState {
     pub batch_started_at: Arc<Mutex<HashMap<String, u64>>>,
     pub task_started_at: Arc<Mutex<HashMap<String, u64>>>,
     pub worker_sender: Arc<Mutex<Option<WorkerSender>>>,
+    pub log_lines: Arc<Mutex<VecDeque<String>>>,
 }
 
 fn now_epoch_seconds() -> u64 {
@@ -46,7 +48,21 @@ impl AppState {
             batch_started_at: Arc::new(Mutex::new(HashMap::new())),
             task_started_at: Arc::new(Mutex::new(HashMap::new())),
             worker_sender: Arc::new(Mutex::new(None)),
+            log_lines: Arc::new(Mutex::new(VecDeque::new())),
         }
+    }
+
+    pub async fn push_log_line(&self, line: String) {
+        let mut logs = self.log_lines.lock().await;
+        logs.push_back(line);
+        if logs.len() > MAX_SYSTEM_LOG_LINES {
+            logs.pop_front();
+        }
+    }
+
+    pub async fn get_log_history(&self) -> Vec<String> {
+        let logs = self.log_lines.lock().await;
+        logs.iter().cloned().collect()
     }
 
     pub async fn insert_batch(&self, batch: BatchState) {
@@ -428,5 +444,18 @@ mod tests {
             logs.last().unwrap(),
             &format!("line-{}", MAX_TASK_JOB_LOG_LINES + 4)
         );
+    }
+
+    #[tokio::test]
+    async fn should_cap_system_log_lines_to_recent_entries() {
+        let state = AppState::new();
+        for index in 0..505 {
+            state.push_log_line(format!("system-line-{index}")).await;
+        }
+
+        let history = state.get_log_history().await;
+        assert_eq!(history.len(), 500);
+        assert_eq!(history.first().unwrap(), "system-line-5");
+        assert_eq!(history.last().unwrap(), "system-line-504");
     }
 }

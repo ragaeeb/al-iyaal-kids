@@ -7,7 +7,7 @@ mod protocol;
 mod runtime;
 mod state;
 mod types;
-mod vision;
+
 mod worker;
 
 use tauri::menu::{AboutMetadataBuilder, Menu, MenuItem, SubmenuBuilder};
@@ -83,7 +83,6 @@ pub fn run() {
             commands::start_transcription_batch,
             commands::start_flag_batch,
             commands::start_cut_job,
-            commands::scan_video_frames,
             commands::cancel_batch,
             commands::cancel_task,
             commands::get_batch_state,
@@ -98,6 +97,7 @@ pub fn run() {
             commands::get_media_preview_url,
             commands::trash_file,
             commands::open_folder_picker,
+            commands::get_log_history,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

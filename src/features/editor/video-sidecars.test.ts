@@ -5,7 +5,6 @@ import {
   isMissingDeleteTargetError,
   toAnalysisSidecarPath,
   toCutRangesSidecarPath,
-  toFrameAnalysisSidecarPath,
   toSrtSidecarPath,
 } from "@/features/editor/video-sidecars";
 
@@ -15,7 +14,6 @@ describe("video sidecars", () => {
 
     expect(toSrtSidecarPath(videoPath)).toBe("/tmp/episode.clip.srt");
     expect(toAnalysisSidecarPath(videoPath)).toBe("/tmp/episode.clip.analysis.json");
-    expect(toFrameAnalysisSidecarPath(videoPath)).toBe("/tmp/episode.clip.frames.analysis.json");
     expect(toCutRangesSidecarPath(videoPath)).toBe("/tmp/episode.clip.ranges.json");
   });
 
@@ -24,7 +22,6 @@ describe("video sidecars", () => {
       "/tmp/example.mov",
       "/tmp/example.srt",
       "/tmp/example.analysis.json",
-      "/tmp/example.frames.analysis.json",
       "/tmp/example.ranges.json",
     ]);
   });

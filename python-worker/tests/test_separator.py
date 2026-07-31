@@ -1,71 +1,42 @@
 from pathlib import Path
 
-import al_iyaal_worker.bs_roformer_mlx as bs_roformer_mlx
+import al_iyaal_worker.demucs_mlx as demucs_mlx
 from al_iyaal_worker.audio_separation import create_vocal_separator
-from al_iyaal_worker.bs_roformer_mlx import (
-    MODEL_FILENAME,
-    BsRoformerMlxSeparator,
-    find_vocals_path,
-)
 
 
-def test_should_create_the_configured_backend_through_the_facade(
-    tmp_path: Path, monkeypatch
-) -> None:
-    created_with: list[Path] = []
-
-    class FakeSeparator:
+def test_should_create_demucs_mlx_through_the_facade(tmp_path: Path, monkeypatch) -> None:
+    class FakeDemucs:
         def __init__(self, model_dir: Path) -> None:
-            created_with.append(model_dir)
+            self.model_dir = model_dir
 
-    monkeypatch.setattr(bs_roformer_mlx, "BsRoformerMlxSeparator", FakeSeparator)
+    monkeypatch.setattr(demucs_mlx, "DemucsMlxSeparator", FakeDemucs)
 
     separator = create_vocal_separator(tmp_path / "models")
 
-    assert isinstance(separator, FakeSeparator)
-    assert created_with == [tmp_path / "models"]
+    assert isinstance(separator, FakeDemucs)
+    assert separator.model_dir == tmp_path / "models"
 
 
-def test_should_find_the_vocals_stem(tmp_path: Path) -> None:
-    output_dir = tmp_path / "outputs"
-    output_dir.mkdir()
-    vocals_path = output_dir / "clip_(Vocals).flac"
-    vocals_path.write_text("vocals")
-
-    assert find_vocals_path([str(output_dir / "clip_(Other).flac"), str(vocals_path)]) == vocals_path
-
-
-def test_should_load_bs_roformer_once_and_reuse_it(tmp_path: Path) -> None:
-    created: list[FakeSeparator] = []
-
-    class FakeModelInstance:
-        output_dir = ""
+def test_should_write_demucs_mlx_vocals_to_the_facade_file_contract(tmp_path: Path) -> None:
+    import numpy as np
+    import soundfile
 
     class FakeSeparator:
-        def __init__(self, **kwargs: object) -> None:
-            self.kwargs = kwargs
-            self.model_instance = FakeModelInstance()
-            self.loaded_models: list[str] = []
-            created.append(self)
+        samplerate = 44_100
 
-        def load_model(self, model_filename: str) -> None:
-            self.loaded_models.append(model_filename)
+        def separate_audio_file(self, input_path: Path):
+            assert input_path.name == "clip.mp4"
+            return None, {"vocals": np.zeros((2, 16), dtype=np.float32)}
 
-        def separate(self, input_path: str) -> list[str]:
-            output_path = Path(self.output_dir) / f"{Path(input_path).stem}_(Vocals).flac"
-            output_path.write_text("vocals")
-            return [str(output_path)]
+    engine = demucs_mlx.DemucsMlxSeparator(
+        tmp_path / "models", separator_factory=lambda **_: FakeSeparator()
+    )
 
-    engine = BsRoformerMlxSeparator(tmp_path / "models", separator_factory=FakeSeparator)
-    first = engine.separate_vocals(tmp_path / "first.mov")
-    second = engine.separate_vocals(tmp_path / "second.mov")
+    separated = engine.separate_vocals(tmp_path / "clip.mp4")
+    samples, samplerate = soundfile.read(separated.vocals_path)
 
-    assert len(created) == 1
-    assert created[0].loaded_models == [MODEL_FILENAME]
-    assert created[0].kwargs["output_single_stem"] == "Vocals"
-    assert created[0].kwargs["save_converted_safetensors"] is True
-    assert first.vocals_path.is_file()
-    assert second.vocals_path.is_file()
-
-    engine.cleanup(first)
-    engine.cleanup(second)
+    assert separated.vocals_path.is_file()
+    assert samples.shape == (16, 2)
+    assert samplerate == 44_100
+    engine.cleanup(separated)
+    assert not separated.work_dir.exists()

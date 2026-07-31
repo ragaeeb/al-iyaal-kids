@@ -20,14 +20,12 @@ use crate::{
     state::AppState,
     types::{
         AnalyticsSnapshot, BatchEvent, BatchStartedResponse, BatchState, BatchStatus, CancelAck,
-        CancelBatchRequest, CancelTaskRequest, CutJobStartedResponse, FrameAnalysisResponse,
-        JobRecord, JobStatus, ListSrtFilesRequest, ListVideosRequest, ModerationRule,
-        ModerationSettings, SaveAck, SaveCutRangesRequest, ScanVideoFramesRequest, SrtListItem,
-        StartBatchRequest, StartCutJobRequest, StartFlagBatchRequest,
-        StartTranscriptionBatchRequest, TaskCancelAck, TaskJobRecord, TaskJobStatus, TaskKind,
-        TaskState, TaskStatus, VideoListItem, WorkerStatusKind,
+        CancelBatchRequest, CancelTaskRequest, CutJobStartedResponse, JobRecord, JobStatus,
+        ListSrtFilesRequest, ListVideosRequest, ModerationRule, ModerationSettings, SaveAck,
+        SaveCutRangesRequest, SrtListItem, StartBatchRequest, StartCutJobRequest,
+        StartFlagBatchRequest, StartTranscriptionBatchRequest, TaskCancelAck, TaskJobRecord,
+        TaskJobStatus, TaskKind, TaskState, TaskStatus, VideoListItem, WorkerStatusKind,
     },
-    vision,
     worker::ensure_worker_sender,
 };
 
@@ -58,13 +56,7 @@ fn ensure_supported_compression_preset(preset: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn ensure_supported_frame_scan_interval(sample_interval_seconds: f32) -> Result<(), String> {
-    if !sample_interval_seconds.is_finite() || sample_interval_seconds <= 0.0 {
-        return Err("Frame scan interval must be greater than 0 seconds.".to_string());
-    }
 
-    Ok(())
-}
 
 fn ensure_supported_cancel_mode(mode: &str) -> Result<(), String> {
     if mode != "stop_after_current" {
@@ -538,22 +530,6 @@ pub async fn start_cut_job(
 }
 
 #[tauri::command]
-pub async fn scan_video_frames(
-    app: AppHandle,
-    request: ScanVideoFramesRequest,
-) -> Result<FrameAnalysisResponse, String> {
-    let validated_path = validate_existing_file_path(&request.video_path)?;
-    if !vision::is_supported_frame_scan_path(&validated_path) {
-        return Err("Only .mp4 and .mov files are supported for flagged frame scans.".to_string());
-    }
-
-    let sample_interval_seconds = request.sample_interval_seconds.unwrap_or(2.0);
-    ensure_supported_frame_scan_interval(sample_interval_seconds)?;
-    let settings = read_or_initialize_moderation_settings(&app)?;
-    vision::scan_video_frames(&app, validated_path, settings, sample_interval_seconds).await
-}
-
-#[tauri::command]
 pub async fn cancel_batch(
     state: State<'_, AppState>,
     request: CancelBatchRequest,
@@ -720,15 +696,20 @@ pub async fn open_folder_picker(app: AppHandle) -> Result<Option<String>, String
         .map_err(|error| format!("Folder picker channel failed: {error}"))
 }
 
+#[tauri::command]
+pub async fn get_log_history(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    Ok(state.get_log_history().await)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         create_task_jobs, cut_ranges_sidecar_path, default_moderation_settings,
         ensure_supported_cancel_mode, ensure_supported_compression_preset,
-        ensure_supported_cut_output_mode, ensure_supported_frame_scan_interval,
-        ensure_supported_output_mode, ensure_supported_yap_mode, get_batch_state_inner,
-        get_task_state_inner, require_worker_sender, resolve_input_paths, save_cut_ranges,
-        validate_existing_file_path, validate_preview_video_path, validate_read_text_file_path,
+        ensure_supported_cut_output_mode, ensure_supported_output_mode,
+        ensure_supported_yap_mode, get_batch_state_inner, get_task_state_inner,
+        require_worker_sender, resolve_input_paths, save_cut_ranges, validate_existing_file_path,
+        validate_preview_video_path, validate_read_text_file_path,
     };
     use crate::{state::AppState, types::SaveCutRangesRequest};
     use std::path::Path;
@@ -755,13 +736,6 @@ mod tests {
     #[test]
     fn should_reject_unsupported_compression_preset() {
         assert!(ensure_supported_compression_preset("ultra").is_err());
-    }
-
-    #[test]
-    fn should_reject_non_positive_frame_scan_interval() {
-        assert!(ensure_supported_frame_scan_interval(0.0).is_err());
-        assert!(ensure_supported_frame_scan_interval(-1.0).is_err());
-        assert!(ensure_supported_frame_scan_interval(2.0).is_ok());
     }
 
     #[test]

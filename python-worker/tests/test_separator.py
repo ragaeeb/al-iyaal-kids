@@ -24,13 +24,15 @@ def test_should_write_demucs_mlx_vocals_to_the_facade_file_contract(tmp_path: Pa
     class FakeSeparator:
         samplerate = 44_100
 
-        def separate_audio_file(self, input_path: Path, *, return_mx: bool = False):
-            assert input_path.name == "clip.mp4"
-            assert return_mx is True
-            return None, {"vocals": np.zeros((2, 16), dtype=np.float32)}
+    def fake_apply(separator: object, input_path: Path):
+        assert isinstance(separator, FakeSeparator)
+        assert input_path.name == "clip.mp4"
+        return np.zeros((2, 16), dtype=np.float32)
 
     engine = demucs_mlx.DemucsMlxSeparator(
-        tmp_path / "models", separator_factory=lambda **_: FakeSeparator()
+        tmp_path / "models",
+        separator_factory=lambda **_: FakeSeparator(),
+        apply_fn=fake_apply,
     )
 
     separated = engine.separate_vocals(tmp_path / "clip.mp4")
@@ -41,6 +43,37 @@ def test_should_write_demucs_mlx_vocals_to_the_facade_file_contract(tmp_path: Pa
     assert samplerate == 44_100
     engine.cleanup(separated)
     assert not separated.work_dir.exists()
+
+
+def test_should_default_to_the_adopted_tuning(tmp_path: Path, monkeypatch) -> None:
+    created: list[dict[str, object]] = []
+
+    class FakeSeparator:
+        def __init__(self, **kwargs: object) -> None:
+            created.append(kwargs)
+
+    for name in (
+        "AIYAAL_DEMUCS_MLX_MODEL",
+        "AIYAAL_DEMUCS_MLX_SHIFTS",
+        "AIYAAL_DEMUCS_MLX_OVERLAP",
+        "AIYAAL_DEMUCS_MLX_JOBS",
+        "AIYAAL_DEMUCS_MLX_BATCH_SIZE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    engine = demucs_mlx.DemucsMlxSeparator(tmp_path / "models", separator_factory=FakeSeparator)
+
+    engine._get_separator()
+
+    assert created == [
+        {
+            "model": "htdemucs",
+            "shifts": 1,
+            "overlap": 0.10,
+            "split": True,
+            "jobs": 0,
+            "batch_size": 8,
+        }
+    ]
 
 
 def test_should_pass_demucs_mlx_tuning_knobs_to_the_library(tmp_path: Path, monkeypatch) -> None:

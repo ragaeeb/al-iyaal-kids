@@ -1,10 +1,11 @@
 """Demucs MLX vocal separation implementation.
 
-The third-party package returns in-memory NumPy stems. This adapter writes the
-vocal stem to the same temporary-file contract used by the existing engine so
-the worker's ffmpeg/remux path remains unchanged.
+The third-party package returns in-memory MLX stems. This adapter transfers only
+the vocal stem to CPU and writes it to the worker's temporary-file contract so
+the existing ffmpeg/remux path remains unchanged.
 """
 
+import os
 import shutil
 import tempfile
 from collections.abc import Callable
@@ -13,7 +14,7 @@ from typing import Any
 
 from .audio_separation import SeparatedAudio
 
-MODEL_NAME = "htdemucs"
+DEFAULT_MODEL_NAME = "htdemucs"
 
 
 class DemucsMlxSeparator:
@@ -34,7 +35,7 @@ class DemucsMlxSeparator:
         separator = self._get_separator()
         work_dir = Path(tempfile.mkdtemp(prefix="al-iyaal-demucs-mlx-separation-"))
         try:
-            _, stems = separator.separate_audio_file(input_path)
+            _, stems = separator.separate_audio_file(input_path, return_mx=True)
             vocals = stems.get("vocals")
             if vocals is None:
                 raise RuntimeError("Demucs MLX did not produce a vocals stem.")
@@ -52,19 +53,27 @@ class DemucsMlxSeparator:
     def _get_separator(self) -> Any:
         if self._separator is None:
             factory = self._separator_factory or self._load_separator_factory()
-            self._separator = factory(model=MODEL_NAME, shifts=1, overlap=0.25, split=True)
+            self._separator = factory(
+                model=os.getenv("AIYAAL_DEMUCS_MLX_MODEL", DEFAULT_MODEL_NAME),
+                shifts=int(os.getenv("AIYAAL_DEMUCS_MLX_SHIFTS", "1")),
+                overlap=float(os.getenv("AIYAAL_DEMUCS_MLX_OVERLAP", "0.25")),
+                split=True,
+                jobs=int(os.getenv("AIYAAL_DEMUCS_MLX_JOBS", "0")),
+                batch_size=int(os.getenv("AIYAAL_DEMUCS_MLX_BATCH_SIZE", "8")),
+            )
         return self._separator
 
     @staticmethod
     def _write_audio(path: Path, audio: Any, samplerate: int) -> None:
         try:
+            import numpy as np
             import soundfile
         except ImportError as error:
             raise RuntimeError("Demucs MLX requires the soundfile package.") from error
 
         # demucs-mlx returns [channels, samples]; soundfile expects
         # [samples, channels]. Mono arrays are accepted unchanged.
-        array = audio
+        array = np.asarray(audio)
         if getattr(array, "ndim", 0) == 2 and array.shape[0] <= 8:
             array = array.T
         soundfile.write(str(path), array, samplerate, subtype="PCM_16")

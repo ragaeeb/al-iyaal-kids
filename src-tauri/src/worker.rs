@@ -172,7 +172,12 @@ async fn spawn_worker_process(
             let line = match command.to_json_line() {
                 Ok(value) => value,
                 Err(error) => {
-                    record_log(&app_for_stdin, &state_for_stdin, format!("worker command serialization error: {error}")).await;
+                    record_log(
+                        &app_for_stdin,
+                        &state_for_stdin,
+                        format!("worker command serialization error: {error}"),
+                    )
+                    .await;
                     let _ = app_for_stdin.emit(
                         BATCH_EVENT_NAME,
                         BatchEvent::worker_status(WorkerStatusKind::Error, error.clone()),
@@ -186,7 +191,12 @@ async fn spawn_worker_process(
             };
 
             if let Err(error) = stdin.write_all(line.as_bytes()).await {
-                record_log(&app_for_stdin, &state_for_stdin, format!("worker stdin write error: {error}")).await;
+                record_log(
+                    &app_for_stdin,
+                    &state_for_stdin,
+                    format!("worker stdin write error: {error}"),
+                )
+                .await;
                 let _ = app_for_stdin.emit(
                     BATCH_EVENT_NAME,
                     BatchEvent::worker_status(
@@ -212,11 +222,21 @@ async fn spawn_worker_process(
         let mut reader = BufReader::new(stdout).lines();
 
         while let Ok(Some(line)) = reader.next_line().await {
-            record_log(&app_for_stdout, &state_for_stdout, format!("worker stdout: {line}")).await;
+            record_log(
+                &app_for_stdout,
+                &state_for_stdout,
+                format!("worker stdout: {line}"),
+            )
+            .await;
             let parsed_event = match parse_worker_event(&line) {
                 Ok(event) => event,
                 Err(error) => {
-                    record_log(&app_for_stdout, &state_for_stdout, format!("worker event parse error: {error}; raw_line={line}")).await;
+                    record_log(
+                        &app_for_stdout,
+                        &state_for_stdout,
+                        format!("worker event parse error: {error}; raw_line={line}"),
+                    )
+                    .await;
                     let _ = app_for_stdout.emit(
                         BATCH_EVENT_NAME,
                         BatchEvent::worker_status(WorkerStatusKind::Error, error.clone()),
@@ -243,7 +263,12 @@ async fn spawn_worker_process(
                         if let Err(error) =
                             analytics::record_batch_completion(&app_for_stdout, &batch, started_at)
                         {
-                            record_log(&app_for_stdout, &state_for_stdout, format!("analytics batch record error: {error}")).await;
+                            record_log(
+                                &app_for_stdout,
+                                &state_for_stdout,
+                                format!("analytics batch record error: {error}"),
+                            )
+                            .await;
                         }
                     }
                 }
@@ -253,7 +278,12 @@ async fn spawn_worker_process(
                         if let Err(error) =
                             analytics::record_task_completion(&app_for_stdout, &task, started_at)
                         {
-                            record_log(&app_for_stdout, &state_for_stdout, format!("analytics task record error: {error}")).await;
+                            record_log(
+                                &app_for_stdout,
+                                &state_for_stdout,
+                                format!("analytics task record error: {error}"),
+                            )
+                            .await;
                         }
                     }
                 }
@@ -267,7 +297,12 @@ async fn spawn_worker_process(
     tauri::async_runtime::spawn(async move {
         let mut reader = BufReader::new(stderr).lines();
         while let Ok(Some(line)) = reader.next_line().await {
-            record_log(&app_for_stderr, &state_for_stderr, format!("worker stderr: {line}")).await;
+            record_log(
+                &app_for_stderr,
+                &state_for_stderr,
+                format!("worker stderr: {line}"),
+            )
+            .await;
             if !is_worker_stderr_error(&line) {
                 continue;
             }

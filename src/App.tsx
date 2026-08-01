@@ -10,6 +10,7 @@ import { type AppPage, defaultAppPage } from "@/features/app/navigation";
 import { trashFile } from "@/features/batch/transport";
 import { useBatchController } from "@/features/batch/useBatchController";
 import {
+  buildBatchAutoQuickActions,
   canStartQueuedMediaAction,
   enqueueMediaQuickAction,
   hasActiveMediaTask,
@@ -30,11 +31,66 @@ const App = () => {
   const [removeMusicQuickActionQueue, setRemoveMusicQuickActionQueue] = useState<
     MediaQuickAction[]
   >([]);
+  const [autoTranscribePaths, setAutoTranscribePaths] = useState<Record<string, boolean>>({});
+  const [autoAnalyzePaths, setAutoAnalyzePaths] = useState<Record<string, boolean>>({});
+  const lastAutoActionBatchIdRef = useRef<string | null>(null);
   const [launchingQuickActionId, setLaunchingQuickActionId] = useState<string | null>(null);
   const isLaunchingQuickActionRef = useRef(false);
   const launchQuickActionRef = useRef<(action: MediaQuickAction) => Promise<void>>(async () => {});
   const batchController = useBatchController();
   const mediaController = useMediaController();
+
+  const autoActionsByPath = useMemo(() => {
+    const map: Record<string, { autoTranscribe?: boolean; autoAnalyze?: boolean }> = {};
+    for (const path of batchController.state.selectedInputPaths) {
+      map[path] = {
+        autoAnalyze: autoAnalyzePaths[path],
+        autoTranscribe: autoTranscribePaths[path],
+      };
+    }
+    return map;
+  }, [batchController.state.selectedInputPaths, autoTranscribePaths, autoAnalyzePaths]);
+
+  const handleToggleAutoTranscribe = (path: string, checked: boolean) => {
+    setAutoTranscribePaths((prev) => ({ ...prev, [path]: checked }));
+    if (!checked) {
+      setAutoAnalyzePaths((prev) => ({ ...prev, [path]: false }));
+    }
+  };
+
+  const handleToggleAutoAnalyze = (path: string, checked: boolean) => {
+    setAutoAnalyzePaths((prev) => ({ ...prev, [path]: checked }));
+    if (checked) {
+      setAutoTranscribePaths((prev) => ({ ...prev, [path]: true }));
+    }
+  };
+
+  const handleToggleAllAutoTranscribe = (checked: boolean) => {
+    const nextTranscribe: Record<string, boolean> = {};
+    const nextAnalyze: Record<string, boolean> = { ...autoAnalyzePaths };
+    for (const path of batchController.state.selectedInputPaths) {
+      nextTranscribe[path] = checked;
+      if (!checked) {
+        nextAnalyze[path] = false;
+      }
+    }
+    setAutoTranscribePaths(nextTranscribe);
+    setAutoAnalyzePaths(nextAnalyze);
+  };
+
+  const handleToggleAllAutoAnalyze = (checked: boolean) => {
+    const nextAnalyze: Record<string, boolean> = {};
+    const nextTranscribe: Record<string, boolean> = { ...autoTranscribePaths };
+    for (const path of batchController.state.selectedInputPaths) {
+      nextAnalyze[path] = checked;
+      if (checked) {
+        nextTranscribe[path] = true;
+      }
+    }
+    setAutoAnalyzePaths(nextAnalyze);
+    setAutoTranscribePaths(nextTranscribe);
+  };
+
   const transcriptionOutputByInputPath = useMemo(
     () => buildLatestTaskOutputPathByInput(mediaController.state.tasksById, "transcription"),
     [mediaController.state.tasksById],
@@ -83,6 +139,34 @@ const App = () => {
       ),
     [transcriptionOutputByInputPath],
   );
+
+  useEffect(() => {
+    const activeBatch = batchController.activeBatch;
+    if (activeBatch?.status !== "completed") {
+      return;
+    }
+
+    if (lastAutoActionBatchIdRef.current === activeBatch.batchId) {
+      return;
+    }
+
+    lastAutoActionBatchIdRef.current = activeBatch.batchId;
+
+    const autoActions = buildBatchAutoQuickActions({
+      autoActionsByPath,
+      completedJobs: activeBatch.jobs,
+    });
+
+    if (autoActions.length > 0) {
+      setRemoveMusicQuickActionQueue((queue) => {
+        let nextQueue = queue;
+        for (const action of autoActions) {
+          nextQueue = enqueueMediaQuickAction(nextQueue, action.kind, action.inputPath);
+        }
+        return nextQueue;
+      });
+    }
+  }, [batchController.activeBatch, autoActionsByPath]);
 
   useEffect(() => {
     launchQuickActionRef.current = async (action) => {
@@ -141,6 +225,12 @@ const App = () => {
         <RemoveMusicPanel
           isActive={activePage === "remove-music"}
           selectedInputPaths={batchController.state.selectedInputPaths}
+          autoTranscribePaths={autoTranscribePaths}
+          autoAnalyzePaths={autoAnalyzePaths}
+          onToggleAutoTranscribe={handleToggleAutoTranscribe}
+          onToggleAutoAnalyze={handleToggleAutoAnalyze}
+          onToggleAllAutoTranscribe={handleToggleAllAutoTranscribe}
+          onToggleAllAutoAnalyze={handleToggleAllAutoAnalyze}
           isStartingBatch={batchController.state.isStartingBatch}
           workerStatus={batchController.state.workerStatus}
           workerMessage={batchController.state.workerMessage}

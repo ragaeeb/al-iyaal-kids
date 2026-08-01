@@ -93,9 +93,9 @@ pub async fn ensure_runtime_ready(app: &AppHandle) -> Result<RuntimePaths, Strin
                 return bundled;
             }
             let system_candidates = [
-                PathBuf::from("/opt/homebrew/bin/ffmpeg"),  // Homebrew on Apple Silicon
-                PathBuf::from("/usr/local/bin/ffmpeg"),      // Homebrew on Intel / manual install
-                PathBuf::from("/opt/local/bin/ffmpeg"),      // MacPorts
+                PathBuf::from("/opt/homebrew/bin/ffmpeg"), // Homebrew on Apple Silicon
+                PathBuf::from("/usr/local/bin/ffmpeg"),    // Homebrew on Intel / manual install
+                PathBuf::from("/opt/local/bin/ffmpeg"),    // MacPorts
             ];
             if let Some(found) = system_candidates.into_iter().find(|p| p.exists()) {
                 return found;
@@ -275,15 +275,7 @@ fn ensure_runtime_python_packages(
     python_executable: &Path,
     requirements_lock: &Path,
 ) -> Result<(), String> {
-    let import_check = Command::new(python_executable)
-        .args([
-            "-c",
-            "import mlx, mlx_audio_separator, torch", // noqa: E702
-        ])
-        .output()
-        .map_err(|error| format!("Failed to execute python import check: {error}"))?;
-
-    if import_check.status.success() {
+    if verify_runtime_python_packages(python_executable).is_ok() {
         return Ok(());
     }
 
@@ -297,5 +289,42 @@ fn ensure_runtime_python_packages(
         python_binary,
         ["-m", "pip", "install", "-r", requirements_path],
         None,
-    )
+    )?;
+
+    verify_runtime_python_packages(python_executable).map_err(|error| {
+        format!("Python runtime dependency verification failed after installation: {error}")
+    })
+}
+
+fn runtime_import_check_script() -> &'static str {
+    "import demucs_mlx, mlx, soundfile, torch"
+}
+
+fn verify_runtime_python_packages(python_executable: &Path) -> Result<(), String> {
+    let import_check = Command::new(python_executable)
+        .args(["-c", runtime_import_check_script()])
+        .output()
+        .map_err(|error| format!("Failed to execute python import check: {error}"))?;
+
+    if import_check.status.success() {
+        return Ok(());
+    }
+
+    Err(format!(
+        "Python imports failed: {}",
+        String::from_utf8_lossy(&import_check.stderr).trim()
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::runtime_import_check_script;
+
+    #[test]
+    fn should_check_for_the_active_demucs_mlx_runtime_dependencies() {
+        assert_eq!(
+            runtime_import_check_script(),
+            "import demucs_mlx, mlx, soundfile, torch"
+        );
+    }
 }

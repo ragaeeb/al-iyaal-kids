@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 
 import {
+  buildBatchAutoQuickActions,
   canStartQueuedMediaAction,
   enqueueMediaQuickAction,
   hasActiveMediaTask,
@@ -36,6 +37,40 @@ describe("media quick action queue", () => {
       {
         id: "flag:/tmp/a.srt",
         inputPath: "/tmp/a.srt",
+        kind: "flag",
+      },
+    ]);
+  });
+
+  it("should build auto quick actions for completed batch jobs", () => {
+    const completedJobs = [
+      { inputPath: "/tmp/a.mp4", outputPath: "/tmp/audio_replaced/a.mp4" },
+      { inputPath: "/tmp/b.mp4", outputPath: "/tmp/audio_replaced/b.mp4" },
+      { inputPath: "/tmp/c.mp4" }, // failed job, no output
+    ];
+
+    const actions = buildBatchAutoQuickActions({
+      autoActionsByPath: {
+        "/tmp/a.mp4": { autoTranscribe: true },
+        "/tmp/b.mp4": { autoAnalyze: true, autoTranscribe: true },
+      },
+      completedJobs,
+    });
+
+    expect(actions).toEqual([
+      {
+        id: "transcription:/tmp/audio_replaced/a.mp4",
+        inputPath: "/tmp/audio_replaced/a.mp4",
+        kind: "transcription",
+      },
+      {
+        id: "transcription:/tmp/audio_replaced/b.mp4",
+        inputPath: "/tmp/audio_replaced/b.mp4",
+        kind: "transcription",
+      },
+      {
+        id: "flag:/tmp/audio_replaced/b.srt",
+        inputPath: "/tmp/audio_replaced/b.srt",
         kind: "flag",
       },
     ]);

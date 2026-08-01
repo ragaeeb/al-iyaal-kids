@@ -56,8 +56,6 @@ fn ensure_supported_compression_preset(preset: &str) -> Result<(), String> {
     Ok(())
 }
 
-
-
 fn ensure_supported_cancel_mode(mode: &str) -> Result<(), String> {
     if mode != "stop_after_current" {
         return Err("Unsupported cancellation mode. Use stop_after_current.".to_string());
@@ -706,10 +704,10 @@ mod tests {
     use super::{
         create_task_jobs, cut_ranges_sidecar_path, default_moderation_settings,
         ensure_supported_cancel_mode, ensure_supported_compression_preset,
-        ensure_supported_cut_output_mode, ensure_supported_output_mode,
-        ensure_supported_yap_mode, get_batch_state_inner, get_task_state_inner,
-        require_worker_sender, resolve_input_paths, save_cut_ranges, validate_existing_file_path,
-        validate_preview_video_path, validate_read_text_file_path,
+        ensure_supported_cut_output_mode, ensure_supported_output_mode, ensure_supported_yap_mode,
+        get_batch_state_inner, get_task_state_inner, require_worker_sender, resolve_input_paths,
+        save_cut_ranges, validate_existing_file_path, validate_preview_video_path,
+        validate_read_text_file_path,
     };
     use crate::{state::AppState, types::SaveCutRangesRequest};
     use std::path::Path;

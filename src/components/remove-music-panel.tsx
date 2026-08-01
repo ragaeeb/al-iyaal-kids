@@ -30,6 +30,12 @@ import type { TaskJobRecord, TaskJobStatus } from "@/features/media/types";
 type RemoveMusicPanelProps = {
   isActive: boolean;
   selectedInputPaths: string[];
+  autoTranscribePaths: Record<string, boolean>;
+  autoAnalyzePaths: Record<string, boolean>;
+  onToggleAutoTranscribe: (path: string, checked: boolean) => void;
+  onToggleAutoAnalyze: (path: string, checked: boolean) => void;
+  onToggleAllAutoTranscribe?: (checked: boolean) => void;
+  onToggleAllAutoAnalyze?: (checked: boolean) => void;
   isStartingBatch: boolean;
   workerStatus: string;
   workerMessage: string;
@@ -512,6 +518,12 @@ const CompletedJobActions = ({
 const RemoveMusicPanel = ({
   isActive,
   selectedInputPaths,
+  autoTranscribePaths,
+  autoAnalyzePaths,
+  onToggleAutoTranscribe,
+  onToggleAutoAnalyze,
+  onToggleAllAutoTranscribe,
+  onToggleAllAutoAnalyze,
   isStartingBatch,
   workerStatus,
   workerMessage,
@@ -719,6 +731,30 @@ const RemoveMusicPanel = ({
                   {selectedInputPaths.length} file{selectedInputPaths.length === 1 ? "" : "s"}{" "}
                   selected
                 </p>
+                {selectedInputPaths.length > 0 &&
+                onToggleAllAutoTranscribe &&
+                onToggleAllAutoAnalyze ? (
+                  <div className="flex items-center gap-3">
+                    <label className="flex cursor-pointer select-none items-center gap-1.5 font-medium text-[#8f5e56] text-xs">
+                      <input
+                        type="checkbox"
+                        checked={selectedInputPaths.every((path) => autoTranscribePaths[path])}
+                        onChange={(e) => onToggleAllAutoTranscribe(e.target.checked)}
+                        className="size-3.5 rounded border-[#d9b7a5] text-[#88322d] accent-[#88322d] focus:ring-[#c57267]/25"
+                      />
+                      Transcribe All
+                    </label>
+                    <label className="flex cursor-pointer select-none items-center gap-1.5 font-medium text-[#8f5e56] text-xs">
+                      <input
+                        type="checkbox"
+                        checked={selectedInputPaths.every((path) => autoAnalyzePaths[path])}
+                        onChange={(e) => onToggleAllAutoAnalyze(e.target.checked)}
+                        className="size-3.5 rounded border-[#d9b7a5] text-[#88322d] accent-[#88322d] focus:ring-[#c57267]/25"
+                      />
+                      Analyze All
+                    </label>
+                  </div>
+                ) : null}
               </div>
               {selectedInputPaths.length === 0 ? (
                 <p className="rounded-[12px] border border-[#ead3c4] bg-white/70 px-2 py-1.5 text-[#9e6d63] text-xs">
@@ -733,19 +769,42 @@ const RemoveMusicPanel = ({
                         ? job.outputPath
                         : null;
 
+                    const isTranscribeChecked = Boolean(autoTranscribePaths[path]);
+                    const isAnalyzeChecked = Boolean(autoAnalyzePaths[path]);
+
                     return (
                       <div
                         key={path}
                         className="rounded-[12px] border border-[#ead3c4] bg-white/80 px-2 py-1.5"
                       >
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="min-w-0 flex-1">
                             <p className="truncate font-medium text-[#5f2823] text-xs" title={path}>
                               {toFileName(path)}
                             </p>
                             <p className="mt-0.5 truncate text-[#9e6d63] text-xs" title={path}>
                               {path}
                             </p>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-3">
+                            <label className="flex cursor-pointer select-none items-center gap-1.5 font-medium text-[#5f2823] text-xs">
+                              <input
+                                type="checkbox"
+                                checked={isTranscribeChecked}
+                                onChange={(e) => onToggleAutoTranscribe(path, e.target.checked)}
+                                className="size-3.5 rounded border-[#d9b7a5] text-[#88322d] accent-[#88322d] focus:ring-[#c57267]/25"
+                              />
+                              Transcribe
+                            </label>
+                            <label className="flex cursor-pointer select-none items-center gap-1.5 font-medium text-[#5f2823] text-xs">
+                              <input
+                                type="checkbox"
+                                checked={isAnalyzeChecked}
+                                onChange={(e) => onToggleAutoAnalyze(path, e.target.checked)}
+                                className="size-3.5 rounded border-[#d9b7a5] text-[#88322d] accent-[#88322d] focus:ring-[#c57267]/25"
+                              />
+                              Analyze
+                            </label>
                           </div>
                           <div className="flex shrink-0 items-center gap-1">
                             {job ? (

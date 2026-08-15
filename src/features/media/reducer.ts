@@ -9,6 +9,11 @@ import type {
 } from "@/features/media/types";
 import { toJobArtifacts } from "@/features/moderation/results";
 import { toJobId } from "@/features/shared/job-id";
+import { toFileName } from "@/features/shared/path";
+
+// Keep recent terminal tasks for selectors and UI status without retaining an unbounded session log.
+export const MAX_RETAINED_TASKS = 50;
+export const MAX_RETAINED_TASK_JOB_SUMMARIES = 2_000;
 
 export type MediaUiState = {
   selectedInputDir: string;
@@ -16,11 +21,12 @@ export type MediaUiState = {
   isLoadingVideos: boolean;
   activeTaskId: string | null;
   tasksById: Record<string, TaskState>;
+  latestJobByKindAndInput: Record<string, TaskJobRecord>;
   selectedVideoPath: string | null;
   workerStatus: "idle" | "starting" | "ready" | "stopped" | "error";
   workerMessage: string;
   errorMessage: string | null;
-  removeMusicSnapshot: Record<string, string>;
+  errorTaskKind: TaskKind | null;
 };
 
 export type MediaUiAction =
@@ -61,16 +67,14 @@ export type MediaUiAction =
     }
   | {
       type: "task_start_error";
-      payload: string;
+      payload: {
+        message: string;
+        taskKind: TaskKind | null;
+      };
     }
   | {
       type: "clear_error";
     };
-
-const toFileName = (path: string) => {
-  const segments = path.split("/");
-  return segments.at(-1) ?? path;
-};
 
 const createQueuedJobs = (inputPaths: string[]): TaskJobRecord[] =>
   inputPaths.map((inputPath) => ({
@@ -81,6 +85,54 @@ const createQueuedJobs = (inputPaths: string[]): TaskJobRecord[] =>
     progressPct: 0,
     status: "queued",
   }));
+
+const isTerminalTask = (task: TaskState) =>
+  task.status === "completed" || task.status === "cancelled";
+
+const pruneTaskHistory = (tasksById: Record<string, TaskState>, activeTaskId: string | null) => {
+  const entries = Object.entries(tasksById);
+  if (entries.length <= MAX_RETAINED_TASKS) {
+    return tasksById;
+  }
+
+  const protectedEntries = entries.filter(
+    ([taskId, task]) => taskId === activeTaskId || !isTerminalTask(task),
+  );
+  const terminalEntries = entries.filter(
+    ([taskId, task]) => taskId !== activeTaskId && isTerminalTask(task),
+  );
+  const retainedTerminalCount = Math.max(0, MAX_RETAINED_TASKS - protectedEntries.length);
+  const retainedTerminalEntries =
+    retainedTerminalCount === 0 ? [] : terminalEntries.slice(-retainedTerminalCount);
+  const retainedTerminalIds = new Set(retainedTerminalEntries.map(([taskId]) => taskId));
+
+  return Object.fromEntries(
+    entries.filter(
+      ([taskId, task]) =>
+        !isTerminalTask(task) || taskId === activeTaskId || retainedTerminalIds.has(taskId),
+    ),
+  );
+};
+
+const toLatestJobKey = (taskKind: TaskKind, inputPath: string) => `${taskKind}\0${inputPath}`;
+
+const updateLatestJobIndex = (
+  index: Record<string, TaskJobRecord>,
+  task: TaskState,
+): Record<string, TaskJobRecord> => {
+  const next = { ...index };
+  for (const job of task.jobs) {
+    const key = toLatestJobKey(task.taskKind, job.inputPath);
+    delete next[key];
+    next[key] = { ...job, logs: [] };
+  }
+
+  const keys = Object.keys(next);
+  for (const key of keys.slice(0, Math.max(0, keys.length - MAX_RETAINED_TASK_JOB_SUMMARIES))) {
+    delete next[key];
+  }
+  return next;
+};
 
 const applyTaskEvent = (task: TaskState, event: TaskEvent): TaskState => {
   if (event.type === "job_progress") {
@@ -176,8 +228,9 @@ const applyTaskEvent = (task: TaskState, event: TaskEvent): TaskState => {
 export const createInitialMediaUiState = (): MediaUiState => ({
   activeTaskId: null,
   errorMessage: null,
+  errorTaskKind: null,
   isLoadingVideos: false,
-  removeMusicSnapshot: {},
+  latestJobByKindAndInput: {},
   selectedInputDir: "",
   selectedVideoPath: null,
   tasksById: {},
@@ -250,10 +303,16 @@ export const mediaReducer = (state: MediaUiState, action: MediaUiAction): MediaU
     return {
       ...state,
       activeTaskId: task.taskId,
-      tasksById: {
-        ...state.tasksById,
-        [task.taskId]: task,
-      },
+      errorMessage: null,
+      errorTaskKind: null,
+      latestJobByKindAndInput: updateLatestJobIndex(state.latestJobByKindAndInput, task),
+      tasksById: pruneTaskHistory(
+        {
+          ...state.tasksById,
+          [task.taskId]: task,
+        },
+        task.taskId,
+      ),
       workerMessage: "Starting worker task...",
       workerStatus: "starting",
     };
@@ -273,12 +332,17 @@ export const mediaReducer = (state: MediaUiState, action: MediaUiAction): MediaU
       return state;
     }
 
+    const updatedTask = applyTaskEvent(task, action.payload);
     return {
       ...state,
-      tasksById: {
-        ...state.tasksById,
-        [task.taskId]: applyTaskEvent(task, action.payload),
-      },
+      latestJobByKindAndInput: updateLatestJobIndex(state.latestJobByKindAndInput, updatedTask),
+      tasksById: pruneTaskHistory(
+        {
+          ...state.tasksById,
+          [task.taskId]: updatedTask,
+        },
+        state.activeTaskId,
+      ),
     };
   }
 
@@ -306,7 +370,8 @@ export const mediaReducer = (state: MediaUiState, action: MediaUiAction): MediaU
   if (action.type === "task_start_error") {
     return {
       ...state,
-      errorMessage: action.payload,
+      errorMessage: action.payload.message,
+      errorTaskKind: action.payload.taskKind,
     };
   }
 
@@ -314,6 +379,7 @@ export const mediaReducer = (state: MediaUiState, action: MediaUiAction): MediaU
     return {
       ...state,
       errorMessage: null,
+      errorTaskKind: null,
     };
   }
 

@@ -1,4 +1,4 @@
-import type { AnalysisSidecar, TaskKind, TaskState } from "@/features/media/types";
+import type { AnalysisSidecar, TaskJobRecord, TaskKind, TaskState } from "@/features/media/types";
 import type { ModerationJobResult } from "@/features/moderation/results";
 
 type TaskMap = Record<string, TaskState>;
@@ -15,6 +15,14 @@ const getLatestTask = (tasksById: TaskMap, taskKind: TaskKind) => {
     .at(-1);
 };
 
+const getLatestTaskForInput = (tasksById: TaskMap, taskKind: TaskKind, inputPath: string) => {
+  return Object.values(tasksById)
+    .filter(
+      (task) => task.taskKind === taskKind && task.jobs.some((job) => job.inputPath === inputPath),
+    )
+    .at(-1);
+};
+
 const getLatestTaskLogLine = (task: TaskState | undefined) => {
   return task?.jobs
     .flatMap((job) => job.logs)
@@ -26,10 +34,23 @@ const getTaskOutputPath = (task: TaskState | undefined) => {
   return task?.jobs.find((job) => typeof job.outputPath === "string")?.outputPath ?? null;
 };
 
-const buildLatestTaskOutputPathByInput = (tasksById: TaskMap, taskKind: TaskKind) =>
-  Object.values(tasksById).reduce<Record<string, string>>((latestOutputByInputPath, task) => {
+const buildLatestTaskOutputPathByInput = (
+  tasksById: TaskMap,
+  taskKind: TaskKind,
+  latestJobByKindAndInput: Record<string, TaskJobRecord> = {},
+) => {
+  const latestOutputByInputPath = Object.entries(latestJobByKindAndInput).reduce<
+    Record<string, string>
+  >((outputs, [key, job]) => {
+    if (key.startsWith(`${taskKind}\0`) && job.status === "completed" && job.outputPath) {
+      outputs[job.inputPath] = job.outputPath;
+    }
+    return outputs;
+  }, {});
+
+  return Object.values(tasksById).reduce<Record<string, string>>((outputs, task) => {
     if (task.taskKind !== taskKind) {
-      return latestOutputByInputPath;
+      return outputs;
     }
 
     for (const job of task.jobs) {
@@ -38,12 +59,37 @@ const buildLatestTaskOutputPathByInput = (tasksById: TaskMap, taskKind: TaskKind
         typeof job.outputPath === "string" &&
         job.outputPath.length > 0
       ) {
-        latestOutputByInputPath[job.inputPath] = job.outputPath;
+        outputs[job.inputPath] = job.outputPath;
       }
     }
 
-    return latestOutputByInputPath;
-  }, {});
+    return outputs;
+  }, latestOutputByInputPath);
+};
+
+const buildLatestTaskJobByInput = (
+  tasksById: TaskMap,
+  taskKind: TaskKind,
+  latestJobByKindAndInput: Record<string, TaskJobRecord> = {},
+) => {
+  const latestJobByInputPath = Object.fromEntries(
+    Object.entries(latestJobByKindAndInput)
+      .filter(([key]) => key.startsWith(`${taskKind}\0`))
+      .map(([, job]) => [job.inputPath, job]),
+  );
+
+  return Object.values(tasksById).reduce<Record<string, TaskJobRecord>>((jobs, task) => {
+    if (task.taskKind !== taskKind) {
+      return jobs;
+    }
+
+    for (const job of task.jobs) {
+      jobs[job.inputPath] = job;
+    }
+
+    return jobs;
+  }, latestJobByInputPath);
+};
 
 const buildModerationResults = (
   task: TaskState | undefined,
@@ -67,9 +113,11 @@ const buildModerationResults = (
 };
 
 export {
+  buildLatestTaskJobByInput,
   buildLatestTaskOutputPathByInput,
   buildModerationResults,
   getLatestTask,
+  getLatestTaskForInput,
   getLatestTaskLogLine,
   getTaskOutputPath,
 };

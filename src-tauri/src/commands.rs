@@ -1,36 +1,124 @@
 use std::{
     fs,
+    io::Write,
     path::{Path, PathBuf},
 };
 
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 use tokio::fs as tokio_fs;
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use crate::{
-    analytics,
+    analysis_agents,
     file_discovery::{
         build_output_dir, collect_media_files, collect_media_files_from_inputs, discover_srt_items,
         discover_video_items,
     },
     ids::{to_file_name, to_job_id},
     protocol::WorkerCommand,
-    state::AppState,
+    state::{AppState, BackendOperation},
     types::{
-        AnalyticsSnapshot, BatchEvent, BatchStartedResponse, BatchState, BatchStatus, CancelAck,
-        CancelBatchRequest, CancelTaskRequest, CutJobStartedResponse, JobRecord, JobStatus,
-        ListSrtFilesRequest, ListVideosRequest, ModerationRule, ModerationSettings, SaveAck,
-        SrtListItem, StartBatchRequest, StartCutJobRequest, StartFlagBatchRequest,
+        AnalysisAgentCapability, AnalysisPromptPreviewRequest, BatchStartedResponse, BatchState,
+        BatchStatus, CancelAck, CancelBatchRequest, CancelTaskRequest, CutJobStartedResponse,
+        JobRecord, JobStatus, ListSrtFilesRequest, ListVideosRequest, ModerationRule,
+        ModerationSettings, SaveAck, SaveAnalysisSidecarRequest, SaveCutRangesRequest, SrtListItem,
+        StartBatchRequest, StartCutJobRequest, StartFlagBatchRequest,
         StartTranscriptionBatchRequest, TaskCancelAck, TaskJobRecord, TaskJobStatus, TaskKind,
-        TaskState, TaskStatus, VideoListItem, WorkerStatusKind,
+        TaskState, TaskStatus, VideoListItem,
     },
     worker::ensure_worker_sender,
 };
 
-const BATCH_EVENT_NAME: &str = "batch-event";
 const MAX_READ_TEXT_FILE_BYTES: u64 = 5 * 1024 * 1024;
+const CLOUD_ANALYSIS_PROMPT: &str =
+    include_str!("../../python-worker/src/al_iyaal_worker/moderation/prompts/cloud.txt");
+const AGENT_ANALYSIS_PROMPT: &str =
+    include_str!("../../python-worker/src/al_iyaal_worker/moderation/prompts/agent.txt");
+const SUPPORTED_VIDEO_EXTENSIONS: [&str; 2] = [".mp4", ".mov"];
+const SUPPORTED_SUBTITLE_EXTENSIONS: [&str; 1] = [".srt"];
+
+fn write_file_atomically(
+    destination: &Path,
+    content: &[u8],
+    unix_mode: Option<u32>,
+) -> Result<(), String> {
+    let Some(parent) = destination.parent() else {
+        return Err(format!(
+            "Failed determining parent directory for {}",
+            destination.display()
+        ));
+    };
+    fs::create_dir_all(parent).map_err(|error| {
+        format!(
+            "Failed creating parent directory {}: {error}",
+            parent.display()
+        )
+    })?;
+
+    let file_name = destination
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("output");
+    let temporary_path = parent.join(format!(".{file_name}.tmp-{}", Uuid::new_v4()));
+    let write_result = (|| {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        if let Some(mode) = unix_mode {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(mode);
+        }
+        #[cfg(not(unix))]
+        let _ = unix_mode;
+
+        let mut temporary_file = options.open(&temporary_path).map_err(|error| {
+            format!(
+                "Failed creating temporary file {}: {error}",
+                temporary_path.display()
+            )
+        })?;
+        temporary_file.write_all(content).map_err(|error| {
+            format!(
+                "Failed writing temporary file {}: {error}",
+                temporary_path.display()
+            )
+        })?;
+        temporary_file.sync_all().map_err(|error| {
+            format!(
+                "Failed syncing temporary file {}: {error}",
+                temporary_path.display()
+            )
+        })?;
+        drop(temporary_file);
+
+        fs::rename(&temporary_path, destination).map_err(|error| {
+            format!(
+                "Failed replacing {} atomically: {error}",
+                destination.display()
+            )
+        })?;
+
+        let parent_directory = fs::File::open(parent).map_err(|error| {
+            format!(
+                "Failed opening parent directory {} for sync: {error}",
+                parent.display()
+            )
+        })?;
+        parent_directory.sync_all().map_err(|error| {
+            format!(
+                "Failed syncing parent directory {}: {error}",
+                parent.display()
+            )
+        })
+    })();
+
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temporary_path);
+    }
+    write_result
+}
 
 fn ensure_supported_output_mode(output_dir_mode: &str) -> Result<(), String> {
     if output_dir_mode != "audio_replaced_default" {
@@ -38,6 +126,35 @@ fn ensure_supported_output_mode(output_dir_mode: &str) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn validate_allowed_extensions(
+    requested: &[String],
+    supported: &[&str],
+    contract_name: &str,
+) -> Result<Vec<String>, String> {
+    if requested.is_empty() {
+        return Err(format!(
+            "At least one {contract_name} extension is required."
+        ));
+    }
+
+    let mut normalized = Vec::with_capacity(requested.len());
+    for value in requested {
+        let trimmed = value.trim().to_ascii_lowercase();
+        let extension = if trimmed.starts_with('.') {
+            trimmed
+        } else {
+            format!(".{trimmed}")
+        };
+        if !supported.contains(&extension.as_str()) {
+            return Err(format!("Unsupported {contract_name} extension: {value}."));
+        }
+        if !normalized.contains(&extension) {
+            normalized.push(extension);
+        }
+    }
+    Ok(normalized)
 }
 
 fn ensure_supported_cut_output_mode(output_mode: &str) -> Result<(), String> {
@@ -50,11 +167,67 @@ fn ensure_supported_cut_output_mode(output_mode: &str) -> Result<(), String> {
 
 fn ensure_supported_compression_preset(preset: &str) -> Result<(), String> {
     if preset != "max_compression" && preset != "balanced" {
-        return Err(
-            "Unsupported compression preset. Use max_compression or balanced.".to_string(),
-        );
+        return Err("Unsupported compression preset. Use max_compression or balanced.".to_string());
     }
 
+    Ok(())
+}
+
+fn parse_time_to_seconds(value: &str) -> Result<f64, String> {
+    let parts = value.trim().split(':').collect::<Vec<_>>();
+    if !(1..=3).contains(&parts.len()) || parts.iter().any(|part| part.is_empty()) {
+        return Err("time value must contain one to three components".to_string());
+    }
+
+    let values = parts
+        .iter()
+        .map(|part| {
+            part.trim()
+                .parse::<f64>()
+                .map_err(|_| "time value contains a non-numeric component".to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if values.iter().any(|value| !value.is_finite()) {
+        return Err("time value must be finite".to_string());
+    }
+    if values[0] < 0.0
+        || values[1..]
+            .iter()
+            .any(|value| *value < 0.0 || *value >= 60.0)
+    {
+        return Err("time value contains an invalid component".to_string());
+    }
+
+    let mut total = 0.0;
+    let mut multiplier = 1.0;
+    for value in values.iter().rev() {
+        total += value * multiplier;
+        multiplier *= 60.0;
+    }
+    Ok(total)
+}
+
+fn validate_cut_ranges(ranges: &[crate::types::CutRange]) -> Result<(), String> {
+    for cut_range in ranges {
+        let start = parse_time_to_seconds(&cut_range.start).map_err(|error| {
+            format!(
+                "Invalid range {}-{}: {error}",
+                cut_range.start, cut_range.end
+            )
+        })?;
+        let end = parse_time_to_seconds(&cut_range.end).map_err(|error| {
+            format!(
+                "Invalid range {}-{}: {error}",
+                cut_range.start, cut_range.end
+            )
+        })?;
+        if start < 0.0 || end <= start {
+            return Err(format!(
+                "Invalid range {}-{}: end must be greater than start",
+                cut_range.start, cut_range.end
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -106,18 +279,113 @@ fn resolve_input_paths(
     Ok(resolved_paths)
 }
 
-fn require_worker_sender(sender: Option<crate::state::WorkerSender>) -> Result<crate::state::WorkerSender, String> {
-    sender.ok_or_else(|| "Worker is not running.".to_string())
+fn is_batch_cancellable(status: &BatchStatus) -> bool {
+    matches!(status, BatchStatus::Queued | BatchStatus::Running)
 }
 
-fn is_allowed_text_sidecar_path(path: &Path) -> bool {
-    let file_name = path.file_name().and_then(|value| value.to_str()).unwrap_or_default();
+fn is_task_cancellable(status: &TaskStatus) -> bool {
+    matches!(status, TaskStatus::Queued | TaskStatus::Running)
+}
+
+async fn try_send_batch_cancel(state: &AppState, batch_id: String, mode: String) -> bool {
+    let Some(batch) = state.get_batch(&batch_id).await else {
+        return false;
+    };
+    if !is_batch_cancellable(&batch.status) {
+        return false;
+    }
+    let Some(worker_sender) = state.worker_sender().await else {
+        return false;
+    };
+
+    worker_sender
+        .send(WorkerCommand::CancelBatch { batch_id, mode })
+        .is_ok()
+}
+
+async fn try_send_task_cancel(state: &AppState, task_id: String, mode: String) -> bool {
+    let Some(task) = state.get_task(&task_id).await else {
+        return false;
+    };
+    if !is_task_cancellable(&task.status) {
+        return false;
+    }
+    let Some(worker_sender) = state.worker_sender().await else {
+        return false;
+    };
+
+    worker_sender
+        .send(WorkerCommand::CancelTask { task_id, mode })
+        .is_ok()
+}
+
+fn is_allowed_trash_file_path(path: &Path) -> bool {
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
     let extension = path
         .extension()
         .and_then(|value| value.to_str())
         .map(|value| value.to_ascii_lowercase());
 
-    matches!(extension.as_deref(), Some("srt")) || file_name.ends_with(".analysis.json")
+    matches!(extension.as_deref(), Some("mp4" | "mov" | "srt"))
+        || file_name.ends_with(".analysis.json")
+        || file_name.ends_with(".ranges.json")
+}
+
+fn validate_trash_file_path(path: &str) -> Result<PathBuf, String> {
+    if path.trim().is_empty() {
+        return Err("File path is required.".to_string());
+    }
+
+    let candidate = PathBuf::from(path);
+    if !is_allowed_trash_file_path(&candidate) {
+        return Err(
+            "Only .mp4, .mov, .srt, .analysis.json, and .ranges.json files can be trashed."
+                .to_string(),
+        );
+    }
+    if candidate.exists() && !candidate.is_file() {
+        return Err(format!("Path is not a file: {}", candidate.display()));
+    }
+    if !candidate.exists() {
+        return Ok(candidate);
+    }
+
+    candidate
+        .canonicalize()
+        .map_err(|error| format!("Failed resolving file path {path}: {error}"))
+}
+
+fn is_allowed_text_sidecar_path(path: &Path) -> bool {
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase());
+
+    matches!(extension.as_deref(), Some("srt"))
+        || file_name.ends_with(".analysis.json")
+        || file_name.ends_with(".ranges.json")
+}
+
+fn cut_ranges_sidecar_path(video_path: &Path) -> PathBuf {
+    video_path.with_extension("ranges.json")
+}
+
+fn is_allowed_preview_video_path(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|value| value.to_str())
+            .map(|value| value.to_ascii_lowercase())
+            .as_deref(),
+        Some("mp4" | "mov")
+    )
 }
 
 fn validate_read_text_file_path(path: &str) -> Result<PathBuf, String> {
@@ -134,7 +402,75 @@ fn validate_read_text_file_path(path: &str) -> Result<PathBuf, String> {
     }
 
     if !is_allowed_text_sidecar_path(&canonical) {
-        return Err("Only .srt and .analysis.json sidecar files can be read.".to_string());
+        return Err(
+            "Only .srt, .analysis.json, and .ranges.json sidecar files can be read.".to_string(),
+        );
+    }
+
+    Ok(canonical)
+}
+
+fn validate_analysis_import_path(path: &str) -> Result<PathBuf, String> {
+    let canonical = validate_existing_file_path(path)?;
+    let is_json = canonical
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value.eq_ignore_ascii_case("json"));
+    if !is_json {
+        return Err("Only JSON files can be imported as analyses.".to_string());
+    }
+    Ok(canonical)
+}
+
+fn build_analysis_prompt_preview(request: &AnalysisPromptPreviewRequest) -> String {
+    if request.engine == "blacklist" {
+        return "Blacklist analysis is deterministic and does not send a prompt to a model."
+            .to_string();
+    }
+    let is_agent = matches!(
+        request.engine.as_str(),
+        "codex" | "antigravity" | "kiro_cli" | "opencode"
+    );
+    let template = if is_agent {
+        AGENT_ANALYSIS_PROMPT
+    } else {
+        CLOUD_ANALYSIS_PROMPT
+    };
+    template
+        .replace("{{criteria}}", &request.content_criteria)
+        .replace("{{guidelines}}", &request.priority_guidelines)
+}
+
+fn validate_analysis_bundle_content(content: &str) -> Result<(), String> {
+    if content.len() > MAX_READ_TEXT_FILE_BYTES as usize {
+        return Err("Analysis sidecar is too large to save safely.".to_string());
+    }
+    let parsed: serde_json::Value = serde_json::from_str(content)
+        .map_err(|error| format!("Analysis sidecar is not valid JSON: {error}"))?;
+    if parsed
+        .get("schemaVersion")
+        .and_then(serde_json::Value::as_u64)
+        != Some(2)
+        || parsed
+            .get("sourceFile")
+            .and_then(serde_json::Value::as_str)
+            .is_none()
+        || parsed
+            .get("analyses")
+            .and_then(serde_json::Value::as_array)
+            .is_none()
+    {
+        return Err(
+            "Analysis sidecar must use schemaVersion 2 with sourceFile and analyses.".to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn validate_preview_video_path(path: &str) -> Result<PathBuf, String> {
+    let canonical = validate_existing_file_path(path)?;
+    if !is_allowed_preview_video_path(&canonical) {
+        return Err("Only .mp4 and .mov files can be previewed.".to_string());
     }
 
     Ok(canonical)
@@ -190,6 +526,8 @@ fn create_task_jobs(input_paths: &[String]) -> Vec<TaskJobRecord> {
 
 fn default_moderation_settings() -> ModerationSettings {
     ModerationSettings {
+        agent_model: String::new(),
+        agent_reasoning_level: String::new(),
         amazon_nova_api_key: String::new(),
         analysis_strategy: "fast".to_string(),
         engine: "blacklist".to_string(),
@@ -232,11 +570,69 @@ fn default_moderation_settings() -> ModerationSettings {
 }
 
 fn is_supported_moderation_engine(value: &str) -> bool {
-    matches!(value, "blacklist" | "gemini" | "nova_pro")
+    matches!(
+        value,
+        "blacklist" | "gemini" | "nova_pro" | "codex" | "antigravity" | "kiro_cli" | "opencode"
+    )
 }
 
 fn is_supported_analysis_strategy(value: &str) -> bool {
     matches!(value, "fast" | "deep")
+}
+
+fn validate_agent_setting(value: &str, label: &str, max_length: usize) -> Result<(), String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(format!("{label} is required for installed-agent analysis."));
+    }
+    if trimmed.chars().count() > max_length || trimmed.contains(['\0', '\n', '\r']) {
+        return Err(format!("{label} is invalid."));
+    }
+    Ok(())
+}
+
+fn validate_moderation_settings(settings: &ModerationSettings) -> Result<(), String> {
+    if !is_supported_moderation_engine(&settings.engine) {
+        return Err(format!(
+            "Unsupported moderation engine: {}",
+            settings.engine
+        ));
+    }
+    if !is_supported_analysis_strategy(&settings.analysis_strategy) {
+        return Err(format!(
+            "Unsupported moderation analysis strategy: {}",
+            settings.analysis_strategy
+        ));
+    }
+    if analysis_agents::is_analysis_agent(&settings.engine) {
+        validate_agent_setting(&settings.agent_model, "Agent model", 256)?;
+        if !settings.agent_reasoning_level.trim().is_empty() {
+            validate_agent_setting(&settings.agent_reasoning_level, "Agent reasoning level", 64)?;
+        }
+    }
+    Ok(())
+}
+
+fn apply_flag_run_overrides(
+    settings: &mut ModerationSettings,
+    engine: Option<String>,
+    analysis_strategy: Option<String>,
+) -> Result<(), String> {
+    if let Some(engine) = engine {
+        if !is_supported_moderation_engine(&engine) {
+            return Err(format!("Unsupported moderation engine: {engine}"));
+        }
+        settings.engine = engine;
+    }
+    if let Some(analysis_strategy) = analysis_strategy {
+        if !is_supported_analysis_strategy(&analysis_strategy) {
+            return Err(format!(
+                "Unsupported moderation analysis strategy: {analysis_strategy}"
+            ));
+        }
+        settings.analysis_strategy = analysis_strategy;
+    }
+    Ok(())
 }
 
 fn moderation_settings_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -267,23 +663,9 @@ fn read_or_initialize_moderation_settings(app: &AppHandle) -> Result<ModerationS
 
 fn write_moderation_settings(app: &AppHandle, settings: &ModerationSettings) -> Result<(), String> {
     let settings_path = moderation_settings_path(app)?;
-    if let Some(parent) = settings_path.parent() {
-        fs::create_dir_all(parent).map_err(|error| {
-            format!(
-                "Failed creating moderation settings directory {}: {error}",
-                parent.display()
-            )
-        })?;
-    }
-
     let content = serde_json::to_string_pretty(settings)
         .map_err(|error| format!("Failed serializing moderation settings: {error}"))?;
-    fs::write(&settings_path, content).map_err(|error| {
-        format!(
-            "Failed writing moderation settings {}: {error}",
-            settings_path.display()
-        )
-    })
+    write_file_atomically(&settings_path, content.as_bytes(), Some(0o600))
 }
 
 async fn get_batch_state_inner(state: &AppState, batch_id: &str) -> Option<BatchState> {
@@ -294,6 +676,51 @@ async fn get_task_state_inner(state: &AppState, task_id: &str) -> Option<TaskSta
     state.get_task(task_id).await
 }
 
+async fn enqueue_batch_command(
+    state: &AppState,
+    worker_sender: &crate::state::WorkerSender,
+    batch: BatchState,
+    command: WorkerCommand,
+) -> Result<(), String> {
+    let batch_id = batch.batch_id.clone();
+    let operation = BackendOperation::Batch(batch_id.clone());
+    if !state.try_admit_backend_operation(operation.clone()).await {
+        return Err("Another media operation is already queued or running.".to_string());
+    }
+    state.insert_batch(batch).await;
+    match worker_sender.send(command) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            state.remove_batch(&batch_id).await;
+            state.release_backend_operation(&operation).await;
+            Err(format!("Failed to enqueue start batch command: {error}"))
+        }
+    }
+}
+
+async fn enqueue_task_command(
+    state: &AppState,
+    worker_sender: &crate::state::WorkerSender,
+    task: TaskState,
+    command: WorkerCommand,
+    error_label: &str,
+) -> Result<(), String> {
+    let task_id = task.task_id.clone();
+    let operation = BackendOperation::Task(task_id.clone());
+    if !state.try_admit_backend_operation(operation.clone()).await {
+        return Err("Another media operation is already queued or running.".to_string());
+    }
+    state.insert_task(task).await;
+    match worker_sender.send(command) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            state.remove_task(&task_id).await;
+            state.release_backend_operation(&operation).await;
+            Err(format!("Failed to enqueue {error_label}: {error}"))
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn start_batch(
     app: AppHandle,
@@ -301,47 +728,44 @@ pub async fn start_batch(
     request: StartBatchRequest,
 ) -> Result<BatchStartedResponse, String> {
     ensure_supported_output_mode(&request.output_dir_mode)?;
+    let allowed_extensions = validate_allowed_extensions(
+        &request.allowed_extensions,
+        &SUPPORTED_VIDEO_EXTENSIONS,
+        "video",
+    )?;
     let input_paths = resolve_input_paths(
         request.input_dir.as_deref(),
         request.input_paths.as_ref(),
-        &request.allowed_extensions,
+        &allowed_extensions,
         "No .mp4/.mov files were selected.",
     )?;
     let first_input_path = input_paths
         .first()
         .ok_or_else(|| "No .mp4/.mov files were selected.".to_string())?;
-    let output_dir = build_output_dir(
-        Path::new(first_input_path)
-            .parent()
-            .ok_or_else(|| format!("Failed to resolve parent directory for input path: {first_input_path}"))?,
-    );
+    let output_dir = build_output_dir(Path::new(first_input_path).parent().ok_or_else(|| {
+        format!("Failed to resolve parent directory for input path: {first_input_path}")
+    })?);
     let batch_id = Uuid::new_v4().to_string();
 
-    state
-        .insert_batch(BatchState {
+    let worker_sender = ensure_worker_sender(app.clone(), state.inner().clone()).await?;
+
+    enqueue_batch_command(
+        state.inner(),
+        &worker_sender,
+        BatchState {
             batch_id: batch_id.clone(),
             status: BatchStatus::Queued,
             jobs: create_batch_jobs(&input_paths),
             summary: None,
-        })
-        .await;
-
-    app.emit(
-        BATCH_EVENT_NAME,
-        BatchEvent::worker_status(WorkerStatusKind::Starting, "Preparing runtime and worker..."),
-    )
-    .map_err(|error| format!("Failed to emit startup status: {error}"))?;
-
-    let worker_sender = ensure_worker_sender(app.clone(), state.inner().clone()).await?;
-
-    worker_sender
-        .send(WorkerCommand::StartBatch {
+        },
+        WorkerCommand::StartBatch {
             batch_id: batch_id.clone(),
             input_paths: input_paths.clone(),
             output_dir: output_dir.to_string_lossy().to_string(),
             compute_mode: "auto".to_string(),
-        })
-        .map_err(|error| format!("Failed to enqueue start batch command: {error}"))?;
+        },
+    )
+    .await?;
 
     Ok(BatchStartedResponse {
         batch_id,
@@ -359,7 +783,16 @@ pub async fn start_transcription_batch(
     ensure_supported_yap_mode(&request.yap_mode)?;
     let allowed_extensions = request
         .allowed_extensions
-        .unwrap_or_else(|| vec![".mp4".to_string(), ".mov".to_string()]);
+        .map(|extensions| {
+            validate_allowed_extensions(&extensions, &SUPPORTED_VIDEO_EXTENSIONS, "video")
+        })
+        .transpose()?
+        .unwrap_or_else(|| {
+            SUPPORTED_VIDEO_EXTENSIONS
+                .iter()
+                .map(|extension| (*extension).to_string())
+                .collect()
+        });
     let input_paths = resolve_input_paths(
         request.input_dir.as_deref(),
         request.input_paths.as_ref(),
@@ -369,24 +802,25 @@ pub async fn start_transcription_batch(
 
     let task_id = Uuid::new_v4().to_string();
 
-    state
-        .insert_task(TaskState {
+    let worker_sender = ensure_worker_sender(app.clone(), state.inner().clone()).await?;
+    enqueue_task_command(
+        state.inner(),
+        &worker_sender,
+        TaskState {
             task_id: task_id.clone(),
             task_kind: TaskKind::Transcription,
             status: TaskStatus::Queued,
             jobs: create_task_jobs(&input_paths),
             summary: None,
-        })
-        .await;
-
-    let worker_sender = ensure_worker_sender(app.clone(), state.inner().clone()).await?;
-    worker_sender
-        .send(WorkerCommand::StartTranscriptionBatch {
+        },
+        WorkerCommand::StartTranscriptionBatch {
             task_id: task_id.clone(),
             input_paths: input_paths.clone(),
             yap_mode: request.yap_mode,
-        })
-        .map_err(|error| format!("Failed to enqueue transcription task: {error}"))?;
+        },
+        "transcription task",
+    )
+    .await?;
 
     Ok(BatchStartedResponse {
         batch_id: task_id,
@@ -403,6 +837,10 @@ pub async fn start_flag_batch(
 ) -> Result<BatchStartedResponse, String> {
     let allowed_extensions = request
         .allowed_extensions
+        .map(|extensions| {
+            validate_allowed_extensions(&extensions, &SUPPORTED_SUBTITLE_EXTENSIONS, "subtitle")
+        })
+        .transpose()?
         .unwrap_or_else(|| vec![".srt".to_string()]);
     let input_paths = resolve_input_paths(
         request.input_dir.as_deref(),
@@ -412,40 +850,39 @@ pub async fn start_flag_batch(
     )?;
 
     let mut settings = read_or_initialize_moderation_settings(&app)?;
-    if let Some(engine) = request.engine {
-        if !is_supported_moderation_engine(&engine) {
-            return Err(format!("Unsupported moderation engine: {engine}"));
-        }
-        settings.engine = engine;
-    }
-    if let Some(analysis_strategy) = request.analysis_strategy {
-        if !is_supported_analysis_strategy(&analysis_strategy) {
-            return Err(format!(
-                "Unsupported moderation analysis strategy: {analysis_strategy}"
-            ));
-        }
-        settings.analysis_strategy = analysis_strategy;
-    }
+    apply_flag_run_overrides(&mut settings, request.engine, request.analysis_strategy)?;
+    validate_moderation_settings(&settings)?;
+    let agent_executable_path = if analysis_agents::is_analysis_agent(&settings.engine) {
+        Some(
+            analysis_agents::resolve_agent_executable(&settings.engine)?
+                .to_string_lossy()
+                .to_string(),
+        )
+    } else {
+        None
+    };
     let task_id = Uuid::new_v4().to_string();
 
-    state
-        .insert_task(TaskState {
+    let worker_sender = ensure_worker_sender(app.clone(), state.inner().clone()).await?;
+    enqueue_task_command(
+        state.inner(),
+        &worker_sender,
+        TaskState {
             task_id: task_id.clone(),
             task_kind: TaskKind::Flag,
             status: TaskStatus::Queued,
             jobs: create_task_jobs(&input_paths),
             summary: None,
-        })
-        .await;
-
-    let worker_sender = ensure_worker_sender(app.clone(), state.inner().clone()).await?;
-    worker_sender
-        .send(WorkerCommand::StartFlagBatch {
+        },
+        WorkerCommand::StartFlagBatch {
+            agent_executable_path,
             task_id: task_id.clone(),
             input_paths: input_paths.clone(),
             settings,
-        })
-        .map_err(|error| format!("Failed to enqueue flag task: {error}"))?;
+        },
+        "flag task",
+    )
+    .await?;
 
     Ok(BatchStartedResponse {
         batch_id: task_id,
@@ -465,34 +902,38 @@ pub async fn start_cut_job(
     if request.ranges.is_empty() {
         return Err("Cut job requires at least one range.".to_string());
     }
+    validate_cut_ranges(&request.ranges)?;
+    let video_path = validate_preview_video_path(&request.video_path)?;
+    let canonical_video_path = video_path.to_string_lossy().to_string();
 
     let task_id = Uuid::new_v4().to_string();
-    let input_paths = vec![request.video_path.clone()];
+    let input_paths = vec![canonical_video_path.clone()];
 
-    state
-        .insert_task(TaskState {
+    let worker_sender = ensure_worker_sender(app.clone(), state.inner().clone()).await?;
+    enqueue_task_command(
+        state.inner(),
+        &worker_sender,
+        TaskState {
             task_id: task_id.clone(),
             task_kind: TaskKind::Cut,
             status: TaskStatus::Queued,
             jobs: create_task_jobs(&input_paths),
             summary: None,
-        })
-        .await;
-
-    let worker_sender = ensure_worker_sender(app.clone(), state.inner().clone()).await?;
-    worker_sender
-        .send(WorkerCommand::StartCutJob {
+        },
+        WorkerCommand::StartCutJob {
             task_id: task_id.clone(),
-            video_path: request.video_path.clone(),
+            video_path: canonical_video_path.clone(),
             ranges: request.ranges,
             output_mode: request.output_mode,
             compression_preset: request.compression_preset,
-        })
-        .map_err(|error| format!("Failed to enqueue cut task: {error}"))?;
+        },
+        "cut task",
+    )
+    .await?;
 
     Ok(CutJobStartedResponse {
         task_id,
-        video_path: request.video_path,
+        video_path: canonical_video_path,
     })
 }
 
@@ -503,14 +944,8 @@ pub async fn cancel_batch(
 ) -> Result<CancelAck, String> {
     ensure_supported_cancel_mode(&request.mode)?;
 
-    let worker_sender = require_worker_sender(state.worker_sender().await)?;
-
-    let accepted = worker_sender
-        .send(WorkerCommand::CancelBatch {
-            batch_id: request.batch_id.clone(),
-            mode: request.mode,
-        })
-        .is_ok();
+    let accepted =
+        try_send_batch_cancel(state.inner(), request.batch_id.clone(), request.mode).await;
 
     Ok(CancelAck {
         batch_id: request.batch_id,
@@ -524,14 +959,7 @@ pub async fn cancel_task(
     request: CancelTaskRequest,
 ) -> Result<TaskCancelAck, String> {
     ensure_supported_cancel_mode(&request.mode)?;
-    let worker_sender = require_worker_sender(state.worker_sender().await)?;
-
-    let accepted = worker_sender
-        .send(WorkerCommand::CancelTask {
-            task_id: request.task_id.clone(),
-            mode: request.mode,
-        })
-        .is_ok();
+    let accepted = try_send_task_cancel(state.inner(), request.task_id.clone(), request.mode).await;
 
     Ok(TaskCancelAck {
         task_id: request.task_id,
@@ -557,8 +985,13 @@ pub async fn get_task_state(
 
 #[tauri::command]
 pub async fn list_videos(request: ListVideosRequest) -> Result<Vec<VideoListItem>, String> {
+    let allowed_extensions = validate_allowed_extensions(
+        &request.allowed_extensions,
+        &SUPPORTED_VIDEO_EXTENSIONS,
+        "video",
+    )?;
     let input_dir = Path::new(&request.input_dir);
-    discover_video_items(input_dir, &request.allowed_extensions)
+    discover_video_items(input_dir, &allowed_extensions)
 }
 
 #[tauri::command]
@@ -573,8 +1006,8 @@ pub async fn get_moderation_settings(app: AppHandle) -> Result<ModerationSetting
 }
 
 #[tauri::command]
-pub async fn get_analytics_snapshot(app: AppHandle) -> Result<AnalyticsSnapshot, String> {
-    analytics::get_analytics_snapshot(&app)
+pub async fn list_analysis_agents() -> Result<Vec<AnalysisAgentCapability>, String> {
+    Ok(analysis_agents::list_analysis_agents().await)
 }
 
 #[tauri::command]
@@ -582,6 +1015,7 @@ pub async fn save_moderation_settings(
     app: AppHandle,
     request: ModerationSettings,
 ) -> Result<SaveAck, String> {
+    validate_moderation_settings(&request)?;
     write_moderation_settings(&app, &request)?;
     Ok(SaveAck { success: true })
 }
@@ -589,9 +1023,16 @@ pub async fn save_moderation_settings(
 #[tauri::command]
 pub async fn read_text_file(path: String) -> Result<String, String> {
     let validated_path = validate_read_text_file_path(&path)?;
-    let metadata = tokio_fs::metadata(&validated_path)
-        .await
-        .map_err(|error| format!("Failed reading file metadata {}: {error}", validated_path.display()))?;
+    read_bounded_text_file(&validated_path).await
+}
+
+async fn read_bounded_text_file(validated_path: &Path) -> Result<String, String> {
+    let metadata = tokio_fs::metadata(validated_path).await.map_err(|error| {
+        format!(
+            "Failed reading file metadata {}: {error}",
+            validated_path.display()
+        )
+    })?;
     if metadata.len() > MAX_READ_TEXT_FILE_BYTES {
         return Err(format!(
             "File is too large to read safely (max {} bytes): {}",
@@ -599,17 +1040,62 @@ pub async fn read_text_file(path: String) -> Result<String, String> {
             validated_path.display()
         ));
     }
-
-    tokio_fs::read_to_string(&validated_path)
+    tokio_fs::read_to_string(validated_path)
         .await
         .map_err(|error| format!("Failed reading file {}: {error}", validated_path.display()))
 }
 
 #[tauri::command]
+pub async fn read_analysis_import_file(path: String) -> Result<String, String> {
+    let validated_path = validate_analysis_import_path(&path)?;
+    read_bounded_text_file(&validated_path).await
+}
+
+#[tauri::command]
+pub async fn save_analysis_sidecar(request: SaveAnalysisSidecarRequest) -> Result<SaveAck, String> {
+    let video_path = validate_preview_video_path(&request.video_path)?;
+    validate_analysis_bundle_content(&request.content)?;
+    let destination = video_path.with_extension("analysis.json");
+    write_file_atomically(&destination, request.content.as_bytes(), None)?;
+    Ok(SaveAck { success: true })
+}
+
+#[tauri::command]
+pub fn get_analysis_prompt_preview(request: AnalysisPromptPreviewRequest) -> String {
+    build_analysis_prompt_preview(&request)
+}
+
+#[tauri::command]
+pub async fn save_cut_ranges(request: SaveCutRangesRequest) -> Result<SaveAck, String> {
+    let video_path = validate_preview_video_path(&request.video_path)?;
+    validate_cut_ranges(&request.ranges)?;
+    let sidecar_path = cut_ranges_sidecar_path(&video_path);
+    let content = serde_json::to_string_pretty(&serde_json::json!({ "ranges": request.ranges }))
+        .map_err(|error| format!("Failed serializing cut ranges: {error}"))?;
+
+    write_file_atomically(&sidecar_path, content.as_bytes(), None)?;
+
+    Ok(SaveAck { success: true })
+}
+
+#[tauri::command]
+pub async fn get_media_preview_url(path: String) -> Result<String, String> {
+    let validated_path = validate_preview_video_path(&path)?;
+    crate::media_preview::register_media_preview_path(validated_path)
+}
+
+#[tauri::command]
 pub async fn trash_file(path: String) -> Result<SaveAck, String> {
-    let validated_path = validate_existing_file_path(&path)?;
-    trash::delete(&validated_path)
-        .map_err(|error| format!("Failed moving file to trash {}: {error}", validated_path.display()))?;
+    let validated_path = validate_trash_file_path(&path)?;
+    if !validated_path.exists() {
+        return Ok(SaveAck { success: true });
+    }
+    trash::delete(&validated_path).map_err(|error| {
+        format!(
+            "Failed moving file to trash {}: {error}",
+            validated_path.display()
+        )
+    })?;
     Ok(SaveAck { success: true })
 }
 
@@ -631,22 +1117,174 @@ pub async fn open_folder_picker(app: AppHandle) -> Result<Option<String>, String
         .map_err(|error| format!("Folder picker channel failed: {error}"))
 }
 
+#[tauri::command]
+pub async fn get_log_history(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    Ok(state.get_log_history().await)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        create_task_jobs, default_moderation_settings, ensure_supported_cancel_mode,
-        ensure_supported_compression_preset, ensure_supported_cut_output_mode,
-        ensure_supported_output_mode, ensure_supported_yap_mode,
-        get_batch_state_inner, get_task_state_inner, require_worker_sender, resolve_input_paths,
-        validate_existing_file_path, validate_read_text_file_path,
+        apply_flag_run_overrides, build_analysis_prompt_preview, create_task_jobs,
+        cut_ranges_sidecar_path, default_moderation_settings, enqueue_task_command,
+        ensure_supported_cancel_mode, ensure_supported_compression_preset,
+        ensure_supported_cut_output_mode, ensure_supported_output_mode, ensure_supported_yap_mode,
+        get_batch_state_inner, get_task_state_inner, parse_time_to_seconds, resolve_input_paths,
+        save_analysis_sidecar, save_cut_ranges, try_send_batch_cancel, try_send_task_cancel,
+        validate_allowed_extensions, validate_analysis_import_path, validate_cut_ranges,
+        validate_existing_file_path, validate_moderation_settings, validate_preview_video_path,
+        validate_read_text_file_path, validate_trash_file_path, write_file_atomically,
+        SUPPORTED_VIDEO_EXTENSIONS,
     };
-    use crate::state::AppState;
+    use crate::{
+        protocol::WorkerCommand,
+        state::AppState,
+        types::{
+            AnalysisPromptPreviewRequest, BatchState, BatchStatus, CutRange,
+            SaveAnalysisSidecarRequest, SaveCutRangesRequest, TaskKind, TaskState, TaskStatus,
+        },
+    };
+    use std::path::Path;
     use uuid::Uuid;
 
     #[test]
     fn should_reject_unsupported_output_mode() {
         let result = ensure_supported_output_mode("custom_mode");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn should_preserve_saved_antigravity_settings_without_a_per_run_override() {
+        let mut settings = default_moderation_settings();
+        settings.engine = "antigravity".to_string();
+        settings.agent_model = "gemini-3.6-flash".to_string();
+        settings.agent_reasoning_level = "low".to_string();
+
+        apply_flag_run_overrides(&mut settings, None, None).unwrap();
+
+        assert_eq!(settings.engine, "antigravity");
+        assert_eq!(settings.agent_model, "gemini-3.6-flash");
+        assert_eq!(settings.agent_reasoning_level, "low");
+    }
+
+    #[test]
+    fn should_validate_requested_extensions_against_the_fixed_video_contract() {
+        assert_eq!(
+            validate_allowed_extensions(
+                &["MP4".to_string(), "mov".to_string(), ".mp4".to_string()],
+                &SUPPORTED_VIDEO_EXTENSIONS,
+                "video",
+            )
+            .unwrap(),
+            vec![".mp4".to_string(), ".mov".to_string()]
+        );
+        assert!(validate_allowed_extensions(&[], &SUPPORTED_VIDEO_EXTENSIONS, "video").is_err());
+        assert!(validate_allowed_extensions(
+            &[".mkv".to_string()],
+            &SUPPORTED_VIDEO_EXTENSIONS,
+            "video"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn should_parse_worker_compatible_time_components() {
+        assert_eq!(parse_time_to_seconds("1"), Ok(1.0));
+        assert_eq!(parse_time_to_seconds("1:02"), Ok(62.0));
+        assert_eq!(parse_time_to_seconds("1:02:03.5"), Ok(3723.5));
+    }
+
+    #[test]
+    fn should_reject_invalid_cut_ranges_before_enqueue() {
+        for (start, end) in [
+            ("NaN", "2"),
+            ("inf", "2"),
+            ("0", "NaN"),
+            ("0", "inf"),
+            ("0:60", "1:01"),
+            ("0:01:60", "0:02:00"),
+            ("0:1:2:3", "0:2"),
+            ("0::1", "0:2"),
+            ("2", "1"),
+        ] {
+            let result = validate_cut_ranges(&[CutRange {
+                start: start.to_string(),
+                end: end.to_string(),
+            }]);
+            assert!(result.is_err(), "expected {start}-{end} to be rejected");
+        }
+    }
+
+    #[test]
+    fn should_accept_nonnegative_forward_cut_ranges() {
+        assert!(validate_cut_ranges(&[
+            CutRange {
+                start: "0".to_string(),
+                end: "0:00:01".to_string(),
+            },
+            CutRange {
+                start: "1:02.5".to_string(),
+                end: "1:03".to_string(),
+            },
+        ])
+        .is_ok());
+    }
+
+    #[test]
+    fn should_replace_a_file_atomically_in_its_own_directory() {
+        let base_dir = std::env::temp_dir().join(format!("al-iyaal-atomic-{}", Uuid::new_v4()));
+        let path = base_dir.join("settings.json");
+        std::fs::create_dir_all(&base_dir).unwrap();
+        std::fs::write(&path, "old").unwrap();
+
+        write_file_atomically(&path, b"new", Some(0o600)).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+        assert!(!base_dir.read_dir().unwrap().any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains(".tmp-")));
+        std::fs::remove_dir_all(base_dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn should_preserve_the_previous_file_when_staging_cannot_write() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let base_dir = std::env::temp_dir().join(format!("al-iyaal-atomic-{}", Uuid::new_v4()));
+        let path = base_dir.join("settings.json");
+        std::fs::create_dir_all(&base_dir).unwrap();
+        std::fs::write(&path, "valid settings").unwrap();
+        let original_permissions = std::fs::metadata(&base_dir).unwrap().permissions();
+        let mut read_only_permissions = original_permissions.clone();
+        read_only_permissions.set_mode(original_permissions.mode() & !0o222);
+        std::fs::set_permissions(&base_dir, read_only_permissions).unwrap();
+
+        let result = write_file_atomically(&path, b"replacement", Some(0o600));
+
+        std::fs::set_permissions(&base_dir, original_permissions).unwrap();
+        assert!(result.is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "valid settings");
+        std::fs::remove_dir_all(base_dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn should_create_user_only_settings_files() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let base_dir = std::env::temp_dir().join(format!("al-iyaal-atomic-{}", Uuid::new_v4()));
+        let path = base_dir.join("settings.json");
+
+        write_file_atomically(&path, b"secret", Some(0o600)).unwrap();
+
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        std::fs::remove_dir_all(base_dir).unwrap();
     }
 
     #[test]
@@ -674,7 +1312,8 @@ mod tests {
 
     #[test]
     fn should_allow_reading_srt_sidecars() {
-        let base_dir = std::env::temp_dir().join(format!("al-iyaal-read-sidecar-{}", Uuid::new_v4()));
+        let base_dir =
+            std::env::temp_dir().join(format!("al-iyaal-read-sidecar-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&base_dir).unwrap();
         let path = base_dir.join("episode.srt");
         std::fs::write(&path, "1").unwrap();
@@ -688,14 +1327,221 @@ mod tests {
 
     #[test]
     fn should_reject_non_sidecar_files_for_read_text_file() {
-        let base_dir = std::env::temp_dir().join(format!("al-iyaal-read-sidecar-{}", Uuid::new_v4()));
+        let base_dir =
+            std::env::temp_dir().join(format!("al-iyaal-read-sidecar-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&base_dir).unwrap();
         let path = base_dir.join("notes.txt");
         std::fs::write(&path, "secret").unwrap();
 
         let error = validate_read_text_file_path(path.to_string_lossy().as_ref()).unwrap_err();
 
-        assert!(error.contains(".srt and .analysis.json"));
+        assert!(error.contains(".srt, .analysis.json, and .ranges.json"));
+
+        std::fs::remove_dir_all(base_dir).unwrap();
+    }
+
+    #[test]
+    fn should_allow_json_files_as_analysis_imports() {
+        let base_dir =
+            std::env::temp_dir().join(format!("al-iyaal-analysis-import-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&base_dir).unwrap();
+        let path = base_dir.join("claude-output.json");
+        std::fs::write(&path, "{}").unwrap();
+
+        let validated = validate_analysis_import_path(path.to_string_lossy().as_ref()).unwrap();
+
+        assert_eq!(validated, path.canonicalize().unwrap());
+        std::fs::remove_dir_all(base_dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn should_save_only_a_versioned_analysis_bundle_atomically() {
+        let base_dir =
+            std::env::temp_dir().join(format!("al-iyaal-save-analysis-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&base_dir).unwrap();
+        let video_path = base_dir.join("episode.mp4");
+        std::fs::write(&video_path, "video").unwrap();
+        let content = r#"{"schemaVersion":2,"sourceFile":"episode.srt","analyses":[]}"#;
+
+        save_analysis_sidecar(SaveAnalysisSidecarRequest {
+            content: content.to_string(),
+            video_path: video_path.to_string_lossy().to_string(),
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(base_dir.join("episode.analysis.json")).unwrap(),
+            content
+        );
+        let invalid = save_analysis_sidecar(SaveAnalysisSidecarRequest {
+            content: "[]".to_string(),
+            video_path: video_path.to_string_lossy().to_string(),
+        })
+        .await;
+        assert!(invalid.is_err());
+        std::fs::remove_dir_all(base_dir).unwrap();
+    }
+
+    #[test]
+    fn should_render_the_exact_selected_analysis_prompt_template() {
+        let prompt = build_analysis_prompt_preview(&AnalysisPromptPreviewRequest {
+            content_criteria: "No profanity".to_string(),
+            engine: "codex".to_string(),
+            priority_guidelines: "High priority guidance".to_string(),
+        });
+
+        assert!(prompt.contains("Read `subtitles.srt`"));
+        assert!(prompt.contains("No profanity"));
+        assert!(prompt.contains("High priority guidance"));
+        assert!(prompt.contains("{{videoFileName}}"));
+
+        let blacklist_prompt = build_analysis_prompt_preview(&AnalysisPromptPreviewRequest {
+            content_criteria: "ignored".to_string(),
+            engine: "blacklist".to_string(),
+            priority_guidelines: "ignored".to_string(),
+        });
+        assert!(blacklist_prompt.contains("does not send a prompt"));
+    }
+
+    #[test]
+    fn should_build_a_ranges_sidecar_path_from_a_video_path() {
+        assert_eq!(
+            cut_ranges_sidecar_path(Path::new("/tmp/episode.clip.mp4")),
+            Path::new("/tmp/episode.clip.ranges.json")
+        );
+    }
+
+    #[test]
+    fn should_allow_reading_ranges_sidecars() {
+        let base_dir =
+            std::env::temp_dir().join(format!("al-iyaal-read-sidecar-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&base_dir).unwrap();
+        let path = base_dir.join("episode.ranges.json");
+        std::fs::write(&path, "{\"ranges\":[]}").unwrap();
+
+        let validated = validate_read_text_file_path(path.to_string_lossy().as_ref()).unwrap();
+
+        assert_eq!(validated, path.canonicalize().unwrap());
+
+        std::fs::remove_dir_all(base_dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn should_save_cut_ranges_as_a_video_sidecar() {
+        let base_dir =
+            std::env::temp_dir().join(format!("al-iyaal-save-ranges-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&base_dir).unwrap();
+        let video_path = base_dir.join("episode.mp4");
+        std::fs::write(&video_path, "video").unwrap();
+
+        save_cut_ranges(SaveCutRangesRequest {
+            video_path: video_path.to_string_lossy().to_string(),
+            ranges: vec![crate::types::CutRange {
+                end: "3.500".to_string(),
+                start: "1.250".to_string(),
+            }],
+        })
+        .await
+        .unwrap();
+
+        let content = std::fs::read_to_string(base_dir.join("episode.ranges.json")).unwrap();
+        let saved: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(saved["ranges"][0]["start"], "1.250");
+        assert_eq!(saved["ranges"][0]["end"], "3.500");
+
+        std::fs::remove_dir_all(base_dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn should_reject_invalid_saved_cut_ranges_before_writing() {
+        let base_dir =
+            std::env::temp_dir().join(format!("al-iyaal-save-ranges-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&base_dir).unwrap();
+        let video_path = base_dir.join("episode.mp4");
+        std::fs::write(&video_path, "video").unwrap();
+
+        let result = save_cut_ranges(SaveCutRangesRequest {
+            video_path: video_path.to_string_lossy().to_string(),
+            ranges: vec![crate::types::CutRange {
+                start: "2".to_string(),
+                end: "1".to_string(),
+            }],
+        })
+        .await;
+
+        assert!(result.is_err());
+        assert!(!base_dir.join("episode.ranges.json").exists());
+        std::fs::remove_dir_all(base_dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn should_allow_empty_saved_cut_ranges_to_clear_the_sidecar() {
+        let base_dir =
+            std::env::temp_dir().join(format!("al-iyaal-clear-ranges-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&base_dir).unwrap();
+        let video_path = base_dir.join("episode.mp4");
+        std::fs::write(&video_path, "video").unwrap();
+
+        save_cut_ranges(SaveCutRangesRequest {
+            video_path: video_path.to_string_lossy().to_string(),
+            ranges: Vec::new(),
+        })
+        .await
+        .unwrap();
+
+        let content = std::fs::read_to_string(base_dir.join("episode.ranges.json")).unwrap();
+        let saved: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(saved["ranges"], serde_json::json!([]));
+
+        std::fs::remove_dir_all(base_dir).unwrap();
+    }
+
+    #[test]
+    fn should_validate_preview_video_files() {
+        let base_dir =
+            std::env::temp_dir().join(format!("al-iyaal-preview-video-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&base_dir).unwrap();
+        let path = base_dir.join("episode.mp4");
+        std::fs::write(&path, "1").unwrap();
+
+        let validated = validate_preview_video_path(path.to_string_lossy().as_ref()).unwrap();
+
+        assert_eq!(validated, path.canonicalize().unwrap());
+
+        std::fs::remove_dir_all(base_dir).unwrap();
+    }
+
+    #[test]
+    fn should_reject_unsupported_preview_video_files() {
+        let base_dir =
+            std::env::temp_dir().join(format!("al-iyaal-preview-video-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&base_dir).unwrap();
+        let path = base_dir.join("episode.mkv");
+        std::fs::write(&path, "1").unwrap();
+
+        let error = validate_preview_video_path(path.to_string_lossy().as_ref()).unwrap_err();
+
+        assert!(error.contains(".mp4 and .mov"));
+
+        std::fs::remove_dir_all(base_dir).unwrap();
+    }
+
+    #[test]
+    fn should_reject_invalid_cut_input_paths_before_enqueue() {
+        let base_dir = std::env::temp_dir().join(format!("al-iyaal-cut-input-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&base_dir).unwrap();
+        let directory = base_dir.join("folder.mp4");
+        let unsupported = base_dir.join("episode.mkv");
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(&unsupported, "video").unwrap();
+
+        assert!(validate_preview_video_path(directory.to_string_lossy().as_ref()).is_err());
+        assert!(validate_preview_video_path(unsupported.to_string_lossy().as_ref()).is_err());
+        assert!(validate_preview_video_path(
+            base_dir.join("missing.mp4").to_string_lossy().as_ref()
+        )
+        .is_err());
 
         std::fs::remove_dir_all(base_dir).unwrap();
     }
@@ -715,10 +1561,125 @@ mod tests {
     }
 
     #[test]
-    fn should_error_when_cancel_requested_without_running_worker() {
-        let result = require_worker_sender(None);
-        assert!(result.is_err());
-        assert_eq!(result.err().unwrap_or_default(), "Worker is not running.");
+    fn should_allow_missing_owned_trash_paths_but_reject_other_paths() {
+        let base_dir =
+            std::env::temp_dir().join(format!("al-iyaal-trash-validation-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&base_dir).unwrap();
+        let missing_sidecar = base_dir.join("episode.analysis.json");
+        let unsupported = base_dir.join("notes.txt");
+        let directory = base_dir.join("folder.mp4");
+        std::fs::create_dir_all(&directory).unwrap();
+
+        assert_eq!(
+            validate_trash_file_path(missing_sidecar.to_string_lossy().as_ref()).unwrap(),
+            missing_sidecar
+        );
+        assert!(validate_trash_file_path(unsupported.to_string_lossy().as_ref()).is_err());
+        assert!(validate_trash_file_path(directory.to_string_lossy().as_ref()).is_err());
+
+        std::fs::remove_dir_all(base_dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn should_reject_cancel_for_missing_or_terminal_work() {
+        let state = AppState::new();
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        state.set_worker_sender(sender).await;
+
+        assert!(
+            !try_send_task_cancel(
+                &state,
+                "missing-task".to_string(),
+                "stop_after_current".to_string()
+            )
+            .await
+        );
+
+        let mut terminal_task = TaskState {
+            task_id: "terminal-task".to_string(),
+            task_kind: TaskKind::Cut,
+            status: TaskStatus::Completed,
+            jobs: create_task_jobs(&["/tmp/episode.mp4".to_string()]),
+            summary: None,
+        };
+        state.insert_task(terminal_task.clone()).await;
+        assert!(
+            !try_send_task_cancel(
+                &state,
+                terminal_task.task_id.clone(),
+                "stop_after_current".to_string()
+            )
+            .await
+        );
+
+        terminal_task.task_id = "queued-task".to_string();
+        terminal_task.status = TaskStatus::Queued;
+        state.insert_task(terminal_task.clone()).await;
+        assert!(
+            try_send_task_cancel(
+                &state,
+                terminal_task.task_id,
+                "stop_after_current".to_string()
+            )
+            .await
+        );
+        assert!(matches!(
+            receiver.recv().await,
+            Some(WorkerCommand::CancelTask { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn should_reject_batch_cancel_for_missing_or_terminal_work() {
+        let state = AppState::new();
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        state.set_worker_sender(sender).await;
+
+        assert!(
+            !try_send_batch_cancel(
+                &state,
+                "missing-batch".to_string(),
+                "stop_after_current".to_string()
+            )
+            .await
+        );
+
+        let terminal_batch = BatchState {
+            batch_id: "terminal-batch".to_string(),
+            status: BatchStatus::Completed,
+            jobs: vec![],
+            summary: None,
+        };
+        state.insert_batch(terminal_batch).await;
+        assert!(
+            !try_send_batch_cancel(
+                &state,
+                "terminal-batch".to_string(),
+                "stop_after_current".to_string()
+            )
+            .await
+        );
+
+        state
+            .insert_batch(BatchState {
+                batch_id: "queued-batch".to_string(),
+                status: BatchStatus::Queued,
+                jobs: vec![],
+                summary: None,
+            })
+            .await;
+        assert!(
+            try_send_batch_cancel(
+                &state,
+                "queued-batch".to_string(),
+                "stop_after_current".to_string()
+            )
+            .await
+        );
+        assert!(matches!(
+            receiver.recv().await,
+            Some(WorkerCommand::CancelBatch { .. })
+        ));
     }
 
     #[tokio::test]
@@ -733,6 +1694,82 @@ mod tests {
         let state = AppState::new();
         let result = get_task_state_inner(&state, "missing-task-id").await;
         assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn should_roll_back_task_state_when_worker_enqueue_fails() {
+        let state = AppState::new();
+        let (worker_sender, worker_receiver) = tokio::sync::mpsc::unbounded_channel();
+        drop(worker_receiver);
+        let task_id = "rollback-task".to_string();
+
+        let result = enqueue_task_command(
+            &state,
+            &worker_sender,
+            TaskState {
+                task_id: task_id.clone(),
+                task_kind: TaskKind::Cut,
+                status: TaskStatus::Queued,
+                jobs: create_task_jobs(&["/tmp/episode.mp4".to_string()]),
+                summary: None,
+            },
+            WorkerCommand::StartTranscriptionBatch {
+                task_id: task_id.clone(),
+                input_paths: vec!["/tmp/episode.mp4".to_string()],
+                yap_mode: "auto".to_string(),
+            },
+            "test task",
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert!(state.get_task(&task_id).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn should_serialize_concurrent_task_admission_before_publication() {
+        let state = AppState::new();
+        let (worker_sender, mut worker_receiver) = tokio::sync::mpsc::unbounded_channel();
+
+        let first = enqueue_task_command(
+            &state,
+            &worker_sender,
+            TaskState {
+                task_id: "concurrent-task-1".to_string(),
+                task_kind: TaskKind::Transcription,
+                status: TaskStatus::Queued,
+                jobs: create_task_jobs(&["/tmp/episode-1.mp4".to_string()]),
+                summary: None,
+            },
+            WorkerCommand::StartTranscriptionBatch {
+                task_id: "concurrent-task-1".to_string(),
+                input_paths: vec!["/tmp/episode-1.mp4".to_string()],
+                yap_mode: "auto".to_string(),
+            },
+            "first task",
+        );
+        let second = enqueue_task_command(
+            &state,
+            &worker_sender,
+            TaskState {
+                task_id: "concurrent-task-2".to_string(),
+                task_kind: TaskKind::Transcription,
+                status: TaskStatus::Queued,
+                jobs: create_task_jobs(&["/tmp/episode-2.mp4".to_string()]),
+                summary: None,
+            },
+            WorkerCommand::StartTranscriptionBatch {
+                task_id: "concurrent-task-2".to_string(),
+                input_paths: vec!["/tmp/episode-2.mp4".to_string()],
+                yap_mode: "auto".to_string(),
+            },
+            "second task",
+        );
+
+        let (first_result, second_result) = tokio::join!(first, second);
+        assert_ne!(first_result.is_ok(), second_result.is_ok());
+        assert!(worker_receiver.recv().await.is_some());
+        assert_eq!(state.tasks.lock().await.len(), 1);
     }
 
     #[test]
@@ -750,7 +1787,8 @@ mod tests {
 
     #[test]
     fn should_expand_remove_music_input_paths_from_files_and_folders() {
-        let base_dir = std::env::temp_dir().join(format!("al-iyaal-start-batch-{}", Uuid::new_v4()));
+        let base_dir =
+            std::env::temp_dir().join(format!("al-iyaal-start-batch-{}", Uuid::new_v4()));
         let folder = base_dir.join("folder");
         std::fs::create_dir_all(&folder).unwrap();
         let direct_file = base_dir.join("a.mov");
@@ -785,5 +1823,25 @@ mod tests {
         let settings = default_moderation_settings();
         assert!(!settings.rules.is_empty());
         assert_eq!(settings.rules[0].priority, "high");
+    }
+
+    #[test]
+    fn should_require_a_model_for_agent_analysis() {
+        let mut settings = default_moderation_settings();
+        settings.engine = "codex".to_string();
+
+        let error = validate_moderation_settings(&settings).unwrap_err();
+
+        assert!(error.contains("Agent model"));
+    }
+
+    #[test]
+    fn should_accept_agent_analysis_with_a_model_and_reasoning_level() {
+        let mut settings = default_moderation_settings();
+        settings.engine = "opencode".to_string();
+        settings.agent_model = "opencode/test".to_string();
+        settings.agent_reasoning_level = "low".to_string();
+
+        assert!(validate_moderation_settings(&settings).is_ok());
     }
 }

@@ -1,5 +1,5 @@
 {
-  "$schema": "https://biomejs.dev/schemas/latest/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.5.8/schema.json",
   "assist": {
     "actions": {
       "source": {
@@ -51,7 +51,7 @@
     "enabled": true,
     "rules": {
       "complexity": {
-        "noExcessiveCognitiveComplexity": "warn"
+        "noExcessiveCognitiveComplexity": "error"
       },
       "nursery": {
         "useSortedClasses": {
@@ -63,7 +63,7 @@
           }
         }
       },
-      "recommended": true,
+      "preset": "recommended",
       "style": {
         "useBlockStatements": {
           "fix": "safe",

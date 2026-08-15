@@ -22,6 +22,7 @@ class StartFlagBatchCommand:
     task_id: str
     input_paths: list[str]
     settings: dict[str, Any]
+    agent_executable_path: str | None = None
 
 
 @dataclass(slots=True)

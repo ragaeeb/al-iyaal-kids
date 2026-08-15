@@ -4,12 +4,14 @@ use tauri::{AppHandle, Emitter};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::Command,
-    sync::mpsc,
+    sync::{mpsc, oneshot},
 };
 
 use crate::{
-    analytics,
-    protocol::{parse_worker_event, to_frontend_batch_event, to_frontend_task_event, WorkerCommand},
+    protocol::{
+        parse_worker_event, to_frontend_batch_event, to_frontend_task_event, WorkerCommand,
+        WorkerEvent,
+    },
     runtime::ensure_runtime_ready,
     state::AppState,
     types::{BatchEvent, TaskEvent, WorkerStatusKind},
@@ -17,15 +19,61 @@ use crate::{
 
 const BATCH_EVENT_NAME: &str = "batch-event";
 const TASK_EVENT_NAME: &str = "task-event";
+pub const SYSTEM_LOG_EVENT_NAME: &str = "system-log-line";
+
+async fn record_log(app: &AppHandle, state: &AppState, message: impl Into<String>) {
+    let msg = message.into();
+    let bounded_message = state.push_log_line(msg).await;
+    eprintln!("{bounded_message}");
+    let _ = app.emit(SYSTEM_LOG_EVENT_NAME, bounded_message);
+}
+
+async fn finalize_worker_completion(state: &AppState, event: &WorkerEvent) {
+    match event {
+        WorkerEvent::BatchDone { .. } => {
+            state.prune_terminal_history().await;
+        }
+        WorkerEvent::TaskDone { .. } => {
+            state.prune_terminal_history().await;
+        }
+        _ => {}
+    }
+}
+
+async fn emit_worker_event(app: &AppHandle, state: &AppState, event: &WorkerEvent) {
+    if let Some(frontend_event) = to_frontend_batch_event(event) {
+        let _ = app.emit(BATCH_EVENT_NAME, frontend_event);
+    }
+    if let Some(task_event) = to_frontend_task_event(event) {
+        let _ = app.emit(TASK_EVENT_NAME, task_event);
+    }
+    finalize_worker_completion(state, event).await;
+}
+
+async fn process_worker_event(app: &AppHandle, state: &AppState, event: &WorkerEvent) {
+    state.apply_worker_event(event).await;
+    emit_worker_event(app, state, event).await;
+}
 
 fn is_worker_stderr_error(line: &str) -> bool {
     let normalized = line.trim().to_ascii_lowercase();
-    ["traceback", "error", "exception", "failed", "fatal", "panic"]
-        .iter()
-        .any(|token| normalized.contains(token))
+    [
+        "traceback",
+        "error",
+        "exception",
+        "failed",
+        "fatal",
+        "panic",
+    ]
+    .iter()
+    .any(|token| normalized.contains(token))
 }
 
-pub async fn ensure_worker_sender(app: AppHandle, state: AppState) -> Result<crate::state::WorkerSender, String> {
+pub async fn ensure_worker_sender(
+    app: AppHandle,
+    state: AppState,
+) -> Result<crate::state::WorkerSender, String> {
+    let _startup_guard = state.worker_start_lock.lock().await;
     if let Some(sender) = state.worker_sender().await {
         if !sender.is_closed() {
             return Ok(sender);
@@ -34,12 +82,18 @@ pub async fn ensure_worker_sender(app: AppHandle, state: AppState) -> Result<cra
 
     app.emit(
         BATCH_EVENT_NAME,
-        BatchEvent::worker_status(WorkerStatusKind::Starting, "Starting persistent Python worker..."),
+        BatchEvent::worker_status(
+            WorkerStatusKind::Starting,
+            "Starting persistent Python worker...",
+        ),
     )
     .map_err(|error| format!("Failed to emit worker startup event: {error}"))?;
     app.emit(
         TASK_EVENT_NAME,
-        TaskEvent::worker_status(WorkerStatusKind::Starting, "Starting persistent Python worker..."),
+        TaskEvent::worker_status(
+            WorkerStatusKind::Starting,
+            "Starting persistent Python worker...",
+        ),
     )
     .map_err(|error| format!("Failed to emit task startup event: {error}"))?;
 
@@ -82,7 +136,10 @@ async fn spawn_worker_process(
         .parent()
         .map(PathBuf::from)
         .ok_or_else(|| "Failed to resolve Python venv bin directory.".to_string())?;
-    let demucs_path = venv_bin_dir.join("demucs");
+    let mlx_model_dir = venv_bin_dir
+        .parent()
+        .ok_or_else(|| "Failed to resolve Python venv directory.".to_string())?
+        .join("models");
     let merged_path = match env::var("PATH") {
         Ok(existing) if !existing.is_empty() => {
             format!("{}:{existing}", venv_bin_dir.to_string_lossy())
@@ -99,9 +156,18 @@ async fn spawn_worker_process(
         .env("PYTHONUNBUFFERED", "1")
         .env("PYTHONPATH", merged_python_path)
         .env("PATH", merged_path)
-        .env("AIYAAL_DEMUCS_PATH", demucs_path.to_string_lossy().to_string())
-        .env("AIYAAL_FFMPEG_PATH", runtime.ffmpeg_executable.to_string_lossy().to_string())
-        .env("AIYAAL_YAP_PATH", runtime.yap_executable.to_string_lossy().to_string());
+        .env(
+            "AIYAAL_MLX_MODEL_DIR",
+            mlx_model_dir.to_string_lossy().to_string(),
+        )
+        .env(
+            "AIYAAL_FFMPEG_PATH",
+            runtime.ffmpeg_executable.to_string_lossy().to_string(),
+        )
+        .env(
+            "AIYAAL_YAP_PATH",
+            runtime.yap_executable.to_string_lossy().to_string(),
+        );
 
     let mut child = command.spawn().map_err(|error| {
         format!(
@@ -127,13 +193,19 @@ async fn spawn_worker_process(
     let (tx, mut rx) = mpsc::unbounded_channel::<WorkerCommand>();
 
     let app_for_stdin = app.clone();
+    let state_for_stdin = state.clone();
     tauri::async_runtime::spawn(async move {
         let mut stdin = stdin;
         while let Some(command) = rx.recv().await {
             let line = match command.to_json_line() {
                 Ok(value) => value,
                 Err(error) => {
-                    eprintln!("worker command serialization error: {error}");
+                    record_log(
+                        &app_for_stdin,
+                        &state_for_stdin,
+                        format!("worker command serialization error: {error}"),
+                    )
+                    .await;
                     let _ = app_for_stdin.emit(
                         BATCH_EVENT_NAME,
                         BatchEvent::worker_status(WorkerStatusKind::Error, error.clone()),
@@ -147,7 +219,12 @@ async fn spawn_worker_process(
             };
 
             if let Err(error) = stdin.write_all(line.as_bytes()).await {
-                eprintln!("worker stdin write error: {error}");
+                record_log(
+                    &app_for_stdin,
+                    &state_for_stdin,
+                    format!("worker stdin write error: {error}"),
+                )
+                .await;
                 let _ = app_for_stdin.emit(
                     BATCH_EVENT_NAME,
                     BatchEvent::worker_status(
@@ -169,98 +246,96 @@ async fn spawn_worker_process(
 
     let app_for_stdout = app.clone();
     let state_for_stdout = state.clone();
+    let (stdout_finished_sender, stdout_finished_receiver) = oneshot::channel();
     tauri::async_runtime::spawn(async move {
         let mut reader = BufReader::new(stdout).lines();
 
         while let Ok(Some(line)) = reader.next_line().await {
-            eprintln!("worker stdout: {line}");
+            record_log(
+                &app_for_stdout,
+                &state_for_stdout,
+                format!("worker stdout: {line}"),
+            )
+            .await;
             let parsed_event = match parse_worker_event(&line) {
                 Ok(event) => event,
                 Err(error) => {
-                    eprintln!("worker event parse error: {error}; raw_line={line}");
+                    record_log(
+                        &app_for_stdout,
+                        &state_for_stdout,
+                        format!("worker event parse error: {error}; raw_line={line}"),
+                    )
+                    .await;
                     let _ = app_for_stdout.emit(
                         BATCH_EVENT_NAME,
-                        BatchEvent::worker_status(WorkerStatusKind::Error, error.clone()),
+                        BatchEvent::worker_status(
+                            WorkerStatusKind::Error,
+                            crate::state::bound_diagnostic_line(error.clone()),
+                        ),
                     );
                     let _ = app_for_stdout.emit(
                         TASK_EVENT_NAME,
-                        TaskEvent::worker_status(WorkerStatusKind::Error, error),
+                        TaskEvent::worker_status(
+                            WorkerStatusKind::Error,
+                            crate::state::bound_diagnostic_line(error),
+                        ),
                     );
                     continue;
                 }
             };
 
-            state_for_stdout.apply_worker_event(&parsed_event).await;
-            if let Some(frontend_event) = to_frontend_batch_event(&parsed_event) {
-                let _ = app_for_stdout.emit(BATCH_EVENT_NAME, frontend_event);
-            }
-            if let Some(task_event) = to_frontend_task_event(&parsed_event) {
-                let _ = app_for_stdout.emit(TASK_EVENT_NAME, task_event);
-            }
-            match &parsed_event {
-                crate::protocol::WorkerEvent::BatchDone { batch_id, .. } => {
-                    if let Some(batch) = state_for_stdout.get_batch(batch_id).await {
-                        let started_at = state_for_stdout.take_batch_started_at(batch_id).await;
-                        if let Err(error) =
-                            analytics::record_batch_completion(&app_for_stdout, &batch, started_at)
-                        {
-                            eprintln!("analytics batch record error: {error}");
-                        }
-                    }
-                }
-                crate::protocol::WorkerEvent::TaskDone { task_id, .. } => {
-                    if let Some(task) = state_for_stdout.get_task(task_id).await {
-                        let started_at = state_for_stdout.take_task_started_at(task_id).await;
-                        if let Err(error) =
-                            analytics::record_task_completion(&app_for_stdout, &task, started_at)
-                        {
-                            eprintln!("analytics task record error: {error}");
-                        }
-                    }
-                }
-                _ => {}
-            }
+            process_worker_event(&app_for_stdout, &state_for_stdout, &parsed_event).await;
         }
+        let _ = stdout_finished_sender.send(());
     });
 
     let app_for_stderr = app.clone();
+    let state_for_stderr = state.clone();
     tauri::async_runtime::spawn(async move {
         let mut reader = BufReader::new(stderr).lines();
         while let Ok(Some(line)) = reader.next_line().await {
-            eprintln!("worker stderr: {line}");
+            record_log(
+                &app_for_stderr,
+                &state_for_stderr,
+                format!("worker stderr: {line}"),
+            )
+            .await;
             if !is_worker_stderr_error(&line) {
                 continue;
             }
             let _ = app_for_stderr.emit(
                 BATCH_EVENT_NAME,
-                BatchEvent::worker_status(WorkerStatusKind::Error, format!("worker stderr: {line}")),
+                BatchEvent::worker_status(
+                    WorkerStatusKind::Error,
+                    crate::state::bound_diagnostic_line(format!("worker stderr: {line}")),
+                ),
             );
             let _ = app_for_stderr.emit(
                 TASK_EVENT_NAME,
-                TaskEvent::worker_status(WorkerStatusKind::Error, format!("worker stderr: {line}")),
+                TaskEvent::worker_status(
+                    WorkerStatusKind::Error,
+                    crate::state::bound_diagnostic_line(format!("worker stderr: {line}")),
+                ),
             );
         }
     });
 
     let app_for_wait = app.clone();
     let state_for_wait = state.clone();
+    let sender_for_wait = tx.clone();
     tauri::async_runtime::spawn(async move {
         let status = child.wait().await;
-        state_for_wait.clear_worker_sender().await;
-
-        let has_active_tasks = state_for_wait
-            .tasks
-            .lock()
-            .await
-            .values()
-            .any(|task| matches!(task.status, crate::types::TaskStatus::Queued | crate::types::TaskStatus::Running));
-        let has_active_batches = state_for_wait
-            .batches
-            .lock()
-            .await
-            .values()
-            .any(|batch| matches!(batch.status, crate::types::BatchStatus::Queued | crate::types::BatchStatus::Running));
-        let has_active_work = has_active_tasks || has_active_batches;
+        let _ = stdout_finished_receiver.await;
+        let terminal_events = state_for_wait
+            .terminalize_active_work("Worker process exited before completing this job.")
+            .await;
+        let has_active_work = !terminal_events.is_empty();
+        for event in &terminal_events {
+            emit_worker_event(&app_for_wait, &state_for_wait, event).await;
+        }
+        state_for_wait
+            .clear_worker_sender_if_current(&sender_for_wait)
+            .await;
 
         let (message, is_error) = match status {
             Ok(exit_status) if exit_status.success() && !has_active_work => {
@@ -270,10 +345,13 @@ async fn spawn_worker_process(
                 format!("Worker process exited while work was still active: {exit_status}"),
                 true,
             ),
-            Ok(exit_status) => (format!("Worker process exited unexpectedly: {exit_status}"), true),
+            Ok(exit_status) => (
+                format!("Worker process exited unexpectedly: {exit_status}"),
+                true,
+            ),
             Err(error) => (format!("Failed waiting on worker process: {error}"), true),
         };
-        eprintln!("{message}");
+        record_log(&app_for_wait, &state_for_wait, &message).await;
 
         let batch_status = if is_error {
             WorkerStatusKind::Error
@@ -306,12 +384,16 @@ mod tests {
     #[test]
     fn should_treat_tracebacks_as_worker_errors() {
         assert!(is_worker_stderr_error("Traceback (most recent call last):"));
-        assert!(is_worker_stderr_error("demucs failed with exit code 1"));
+        assert!(is_worker_stderr_error("Demucs MLX separation failed"));
     }
 
     #[test]
     fn should_ignore_informational_worker_stderr_lines() {
-        assert!(!is_worker_stderr_error("Using cache found in /Users/test/.cache"));
-        assert!(!is_worker_stderr_error("UserWarning: This path is deprecated."));
+        assert!(!is_worker_stderr_error(
+            "Using cache found in /Users/test/.cache"
+        ));
+        assert!(!is_worker_stderr_error(
+            "UserWarning: This path is deprecated."
+        ));
     }
 }

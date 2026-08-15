@@ -15,7 +15,7 @@ const MetricCard = ({ icon, label, value, hint }: MetricCardProps) => {
       <CardHeader className="grid grid-cols-[1fr_auto] items-start gap-2">
         <div>
           <p className="text-[#8f5e56] text-xs">{label}</p>
-          <CardTitle className="mt-0.5 text-xl text-[#4f1f1a] tracking-tight">{value}</CardTitle>
+          <CardTitle className="mt-0.5 text-[#4f1f1a] text-xl tracking-tight">{value}</CardTitle>
         </div>
         <div className="flex size-7 items-center justify-center rounded-lg bg-[#f5e6dc] text-[#88322d]">
           {icon}

@@ -1,7 +1,6 @@
-# Refresh manually with: uv pip compile pyproject.toml -o requirements.lock.txt
-# Intentionally installed during first-run runtime bootstrap.
-better-profanity
-demucs
-torch
-torchaudio
-torchcodec
+# App-managed runtime bootstrap installs only the core worker stack from this file.
+# Keep local frame-scan vision packages on-demand in src-tauri/src/vision.rs.
+better-profanity==0.7.0
+demucs-mlx==1.4.4
+soundfile==0.13.1
+torch==2.13.0

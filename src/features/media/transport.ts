@@ -1,8 +1,14 @@
+import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { MEDIA_ALLOWED_EXTENSIONS, TASK_EVENT_NAME } from "@/features/media/constants";
 import type {
+  AnalysisAgentCapability,
+  AnalysisPromptPreviewRequest,
   CancelTaskRequest,
   CutJobStartedResponse,
   ModerationSettings,
+  SaveAnalysisSidecarRequest,
+  SaveCutRangesRequest,
   SrtListItem,
   StartCutJobRequest,
   StartFlagBatchRequest,
@@ -13,7 +19,6 @@ import type {
   TaskState,
   VideoListItem,
 } from "@/features/media/types";
-import { invoke, listen, type UnlistenFn } from "@/lib/tauri";
 
 type InvokeFn = typeof invoke;
 type ListenFn = typeof listen;
@@ -51,6 +56,11 @@ export const startCutJob = (request: StartCutJobRequest, invokeFn: InvokeFn = in
     request,
   });
 
+export const saveCutRanges = (request: SaveCutRangesRequest, invokeFn: InvokeFn = invoke) =>
+  invokeFn<{ success: boolean }>("save_cut_ranges", {
+    request,
+  });
+
 export const cancelTask = (request: CancelTaskRequest, invokeFn: InvokeFn = invoke) =>
   invokeFn<TaskCancelAck>("cancel_task", {
     request,
@@ -64,6 +74,9 @@ export const getTaskState = (taskId: string, invokeFn: InvokeFn = invoke) =>
 export const getModerationSettings = (invokeFn: InvokeFn = invoke) =>
   invokeFn<ModerationSettings>("get_moderation_settings");
 
+export const listAnalysisAgents = (invokeFn: InvokeFn = invoke) =>
+  invokeFn<AnalysisAgentCapability[]>("list_analysis_agents");
+
 export const saveModerationSettings = (settings: ModerationSettings, invokeFn: InvokeFn = invoke) =>
   invokeFn<{ success: boolean }>("save_moderation_settings", {
     request: settings,
@@ -71,6 +84,24 @@ export const saveModerationSettings = (settings: ModerationSettings, invokeFn: I
 
 export const readTextFile = (path: string, invokeFn: InvokeFn = invoke) =>
   invokeFn<string>("read_text_file", {
+    path,
+  });
+
+export const readAnalysisImportFile = (path: string, invokeFn: InvokeFn = invoke) =>
+  invokeFn<string>("read_analysis_import_file", { path });
+
+export const saveAnalysisSidecar = (
+  request: SaveAnalysisSidecarRequest,
+  invokeFn: InvokeFn = invoke,
+) => invokeFn<{ success: boolean }>("save_analysis_sidecar", { request });
+
+export const getAnalysisPromptPreview = (
+  request: AnalysisPromptPreviewRequest,
+  invokeFn: InvokeFn = invoke,
+) => invokeFn<string>("get_analysis_prompt_preview", { request });
+
+export const getMediaPreviewUrl = (path: string, invokeFn: InvokeFn = invoke) =>
+  invokeFn<string>("get_media_preview_url", {
     path,
   });
 

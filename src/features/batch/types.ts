@@ -100,12 +100,14 @@ export type BatchUiState = {
 
 export type BatchUiAction =
   | { type: "set_selected_input_paths"; payload: string[] }
+  | { type: "add_selected_input_paths"; payload: string[] }
   | {
       type: "set_worker_status";
       payload: { status: BatchUiState["workerStatus"]; message: string };
     }
   | { type: "start_batch_request" }
   | { type: "start_batch_success"; payload: BatchState }
+  | { type: "cancel_batch_accepted" }
   | { type: "start_batch_error"; payload: string }
   | { type: "apply_event"; payload: BatchEvent }
   | { type: "clear_error" };

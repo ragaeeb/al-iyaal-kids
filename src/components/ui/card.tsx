@@ -1,4 +1,4 @@
-import type { HTMLAttributes } from "react";
+import { forwardRef, type HTMLAttributes } from "react";
 
 import { cn } from "@/lib/cn";
 
@@ -6,17 +6,22 @@ type CardProps = HTMLAttributes<HTMLDivElement> & {
   size?: "default" | "sm";
 };
 
-const Card = ({ className, size = "default", ...props }: CardProps) => (
-  <div
-    data-size={size}
-    data-slot="card"
-    className={cn(
-      "flex flex-col gap-1.5 rounded-[20px] border border-[#ead3c4] bg-[linear-gradient(180deg,rgba(255,251,248,0.96),rgba(255,246,240,0.92))] py-2.5 text-[#4f1f1a] text-xs shadow-[0_12px_28px_rgba(136,50,45,0.08)] data-[size=sm]:gap-1 data-[size=sm]:py-2",
-      className,
-    )}
-    {...props}
-  />
+const Card = forwardRef<HTMLDivElement, CardProps>(
+  ({ className, size = "default", ...props }, ref) => (
+    <div
+      ref={ref}
+      data-size={size}
+      data-slot="card"
+      className={cn(
+        "flex flex-col gap-1.5 rounded-[20px] border border-[#ead3c4] bg-[linear-gradient(180deg,rgba(255,251,248,0.96),rgba(255,246,240,0.92))] py-2.5 text-[#4f1f1a] text-xs shadow-[0_12px_28px_rgba(136,50,45,0.08)] data-[size=sm]:gap-1 data-[size=sm]:py-2",
+        className,
+      )}
+      {...props}
+    />
+  ),
 );
+
+Card.displayName = "Card";
 
 const CardHeader = ({ className, ...props }: HTMLAttributes<HTMLDivElement>) => (
   <div
@@ -34,28 +39,8 @@ const CardTitle = ({ className, ...props }: HTMLAttributes<HTMLDivElement>) => (
   />
 );
 
-const CardDescription = ({ className, ...props }: HTMLAttributes<HTMLDivElement>) => (
-  <div
-    className={cn("text-[#8f5e56] text-xs leading-5", className)}
-    data-slot="card-description"
-    {...props}
-  />
-);
-
-const CardAction = ({ className, ...props }: HTMLAttributes<HTMLDivElement>) => (
-  <div
-    className={cn("col-start-2 row-span-2 row-start-1 self-start justify-self-end", className)}
-    data-slot="card-action"
-    {...props}
-  />
-);
-
 const CardContent = ({ className, ...props }: HTMLAttributes<HTMLDivElement>) => (
   <div className={cn("px-3", className)} data-slot="card-content" {...props} />
 );
 
-const CardFooter = ({ className, ...props }: HTMLAttributes<HTMLDivElement>) => (
-  <div className={cn("flex items-center px-3", className)} data-slot="card-footer" {...props} />
-);
-
-export { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle };
+export { Card, CardContent, CardHeader, CardTitle };

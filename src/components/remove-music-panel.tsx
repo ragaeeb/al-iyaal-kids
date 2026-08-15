@@ -1,5 +1,3 @@
-import type { DragDropEvent } from "@tauri-apps/api/window";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   AlertCircle,
   FileAudio2,
@@ -13,22 +11,31 @@ import {
   ShieldAlert,
   Trash2,
 } from "lucide-react";
-import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-import { LogOutput } from "@/components/log-output";
-import { TaskDrawer } from "@/components/task-drawer";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import type { JobRecord } from "@/features/batch/types";
 import { dedupePaths, isSupportedVideoPath } from "@/features/batch/utils";
+import { toMediaQuickActionId } from "@/features/media/quick-action-queue";
 import { listVideos } from "@/features/media/transport";
+import type { TaskJobRecord, TaskJobStatus } from "@/features/media/types";
+import { useTauriFileDrop } from "@/features/media/useTauriFileDrop";
+import { toFileName } from "@/features/shared/path";
 
 type RemoveMusicPanelProps = {
   isActive: boolean;
   selectedInputPaths: string[];
+  autoTranscribePaths: Record<string, boolean>;
+  autoAnalyzePaths: Record<string, boolean>;
+  onToggleAutoTranscribe: (path: string, checked: boolean) => void;
+  onToggleAutoAnalyze: (path: string, checked: boolean) => void;
+  onToggleAllAutoTranscribe?: (checked: boolean) => void;
+  onToggleAllAutoAnalyze?: (checked: boolean) => void;
   isStartingBatch: boolean;
+  isBatchActive: boolean;
   workerStatus: string;
   workerMessage: string;
   progressPct: number;
@@ -40,146 +47,261 @@ type RemoveMusicPanelProps = {
   onClearSelectedInputs: () => void;
   onStart: () => Promise<void>;
   onCancel: () => Promise<void>;
-  onOpenOutput: (path: string) => Promise<void>;
   onSendToTranscription: (path: string) => Promise<void>;
-  onSendToProfanity: (path: string) => Promise<void>;
+  onSendToAnalysis: (path: string) => Promise<void>;
   onSendToCut: (path: string) => void;
-  onTrashOriginal: (path: string) => Promise<void>;
   transcriptionOutputByInputPath: Record<string, string>;
   analysisOutputByInputPath: Record<string, string>;
+  transcriptionJobByInputPath: Record<string, TaskJobRecord>;
+  analysisJobByInputPath: Record<string, TaskJobRecord>;
+  queuedTranscriptionPaths: string[];
+  queuedAnalysisPaths: string[];
+  launchingQuickActionId: string | null;
   onClearError: () => void;
-};
-
-type CompletedJobActionsProps = {
-  analysisOutputByInputPath: Record<string, string>;
-  busyDetectPath: string | null;
-  job: JobRecord;
-  busyTrashPath: string | null;
-  busyTranscribePath: string | null;
-  isOriginalTrashed: boolean;
-  onOpenOutput: (path: string) => Promise<void>;
-  onSendToProfanity: (path: string) => Promise<void>;
-  onSendToCut: (path: string) => void;
-  onSendToTranscription: (path: string) => Promise<void>;
-  onTrashOriginal: (path: string) => Promise<void>;
-  setBusyDetectPath: (path: string | null) => void;
-  setBusyTrashPath: (path: string | null) => void;
-  setBusyTranscribePath: (path: string | null) => void;
-  transcriptionOutputByInputPath: Record<string, string>;
-  setTrashedPaths: React.Dispatch<React.SetStateAction<string[]>>;
 };
 
 type ProcessedVideoQuickActionsProps = {
   analysisOutputByInputPath: Record<string, string>;
-  busyDetectPath: string | null;
-  busyTranscribePath: string | null;
+  analysisJobByInputPath: Record<string, TaskJobRecord>;
+  launchingQuickActionId: string | null;
   onSendToCut: (path: string) => void;
-  onSendToProfanity: (path: string) => Promise<void>;
+  onSendToAnalysis: (path: string) => Promise<void>;
   onSendToTranscription: (path: string) => Promise<void>;
   processedVideoPath: string;
-  setBusyDetectPath: (path: string | null) => void;
-  setBusyTranscribePath: (path: string | null) => void;
+  queuedAnalysisPaths: string[];
+  queuedTranscriptionPaths: string[];
+  transcriptionJobByInputPath: Record<string, TaskJobRecord>;
   transcriptionOutputByInputPath: Record<string, string>;
+};
+
+type TranscriptionQuickActionState = {
+  isActive: boolean;
+  isQueued: boolean;
+  isStarting: boolean;
+  job: TaskJobRecord | undefined;
+};
+
+type AnalysisQuickActionState = {
+  hasCompletedAnalysis: boolean;
+  isActive: boolean;
+  isQueued: boolean;
+  isStarting: boolean;
+  job: TaskJobRecord | undefined;
+  subtitlePath: string | undefined;
 };
 
 const toStatusVariant = (status: JobRecord["status"]) => status;
 
-const toFileName = (path: string) => path.split("/").at(-1) ?? path;
+const isActiveTaskStatus = (status: TaskJobStatus | undefined) =>
+  status === "queued" || status === "running";
 
-const ProcessedVideoQuickActions = ({
-  analysisOutputByInputPath,
-  busyDetectPath,
-  busyTranscribePath,
-  onSendToCut,
-  onSendToProfanity,
-  onSendToTranscription,
-  processedVideoPath,
-  setBusyDetectPath,
-  setBusyTranscribePath,
-  transcriptionOutputByInputPath,
-}: ProcessedVideoQuickActionsProps) => {
-  const subtitlePath = transcriptionOutputByInputPath[processedVideoPath];
-  const hasCompletedAnalysis = Boolean(subtitlePath && analysisOutputByInputPath[subtitlePath]);
+const toStatusText = (status: TaskJobStatus, progressPct: number | undefined) => {
+  if (status === "completed") {
+    return "done";
+  }
+
+  if (status === "running" && typeof progressPct === "number") {
+    return `${progressPct}%`;
+  }
+
+  return status;
+};
+
+const QuickActionStatusBadge = ({
+  isQueued,
+  job,
+  label,
+}: {
+  isQueued: boolean;
+  job: TaskJobRecord | undefined;
+  label: string;
+}) => {
+  const status = isQueued ? "queued" : (job?.status ?? null);
+  if (!status) {
+    return null;
+  }
 
   return (
-    <div className="flex items-center gap-1">
-      <Button
-        type="button"
-        size="icon"
-        variant="secondary"
-        title="Transcribe this video"
-        aria-label="Transcribe this video"
-        disabled={busyTranscribePath === processedVideoPath}
-        onClick={async () => {
-          setBusyTranscribePath(processedVideoPath);
-          try {
-            await onSendToTranscription(processedVideoPath);
-          } finally {
-            setBusyTranscribePath(null);
-          }
-        }}
-      >
-        {busyTranscribePath === processedVideoPath ? (
-          <LoaderCircle className="size-3.5 animate-spin" />
-        ) : (
-          <ScanText className="size-3.5" />
-        )}
-      </Button>
-      {subtitlePath ? (
-        <Button
-          type="button"
-          size="icon"
-          variant={hasCompletedAnalysis ? "secondary" : "outline"}
-          title={hasCompletedAnalysis ? "Run profanity detection again" : "Run profanity detection"}
-          aria-label={
-            hasCompletedAnalysis ? "Run profanity detection again" : "Run profanity detection"
-          }
-          disabled={busyDetectPath === subtitlePath}
-          onClick={async () => {
-            setBusyDetectPath(subtitlePath);
-            try {
-              await onSendToProfanity(subtitlePath);
-            } finally {
-              setBusyDetectPath(null);
-            }
-          }}
-        >
-          {busyDetectPath === subtitlePath ? (
-            <LoaderCircle className="size-3.5 animate-spin" />
-          ) : (
-            <ShieldAlert className="size-3.5" />
-          )}
-        </Button>
-      ) : null}
-      <Button
-        type="button"
-        size="icon"
-        variant="outline"
-        title="Open this video in Edit Video"
-        aria-label="Open this video in Edit Video"
-        onClick={() => onSendToCut(processedVideoPath)}
-      >
-        <Scissors className="size-3.5" />
-      </Button>
-    </div>
+    <Badge className="min-w-0 px-1.5 normal-case" variant={status}>
+      {label} {toStatusText(status, job?.progressPct)}
+    </Badge>
   );
 };
 
-const isWithinDropTarget = (
-  targetRef: RefObject<HTMLDivElement | null>,
-  position: { x: number; y: number },
-) => {
-  const element = targetRef.current;
-  if (!element) {
-    return false;
+const buildTranscriptionQuickActionState = ({
+  job,
+  launchingQuickActionId,
+  processedVideoPath,
+  queuedTranscriptionPaths,
+}: {
+  job: TaskJobRecord | undefined;
+  launchingQuickActionId: string | null;
+  processedVideoPath: string;
+  queuedTranscriptionPaths: string[];
+}): TranscriptionQuickActionState => {
+  const isQueued = queuedTranscriptionPaths.includes(processedVideoPath);
+
+  return {
+    isActive: isQueued || isActiveTaskStatus(job?.status),
+    isQueued,
+    isStarting:
+      launchingQuickActionId === toMediaQuickActionId("transcription", processedVideoPath),
+    job,
+  };
+};
+
+const buildAnalysisQuickActionState = ({
+  analysisJobByInputPath,
+  analysisOutputByInputPath,
+  launchingQuickActionId,
+  queuedAnalysisPaths,
+  subtitlePath,
+}: {
+  analysisJobByInputPath: Record<string, TaskJobRecord>;
+  analysisOutputByInputPath: Record<string, string>;
+  launchingQuickActionId: string | null;
+  queuedAnalysisPaths: string[];
+  subtitlePath: string | undefined;
+}): AnalysisQuickActionState => {
+  const job = subtitlePath ? analysisJobByInputPath[subtitlePath] : undefined;
+  const isQueued = subtitlePath ? queuedAnalysisPaths.includes(subtitlePath) : false;
+
+  return {
+    hasCompletedAnalysis: Boolean(subtitlePath && analysisOutputByInputPath[subtitlePath]),
+    isActive: isQueued || isActiveTaskStatus(job?.status),
+    isQueued,
+    isStarting:
+      subtitlePath !== undefined &&
+      launchingQuickActionId === toMediaQuickActionId("flag", subtitlePath),
+    job,
+    subtitlePath,
+  };
+};
+
+const TranscriptionQuickActionButton = ({
+  onClick,
+  state,
+}: {
+  onClick: () => void;
+  state: TranscriptionQuickActionState;
+}) => {
+  const isCompleted = state.job?.status === "completed";
+
+  return (
+    <Button
+      type="button"
+      size="icon"
+      variant={isCompleted ? "secondary" : "outline"}
+      title={isCompleted ? "Transcribe this video again" : "Transcribe this video"}
+      aria-label={isCompleted ? "Transcribe this video again" : "Transcribe this video"}
+      disabled={state.isActive}
+      onClick={onClick}
+    >
+      {state.isActive || state.isStarting ? (
+        <LoaderCircle className="size-3.5 animate-spin" />
+      ) : (
+        <ScanText className="size-3.5" />
+      )}
+    </Button>
+  );
+};
+
+const AnalysisQuickActionButton = ({
+  onClick,
+  state,
+}: {
+  onClick: (subtitlePath: string) => void;
+  state: AnalysisQuickActionState;
+}) => {
+  if (!state.subtitlePath) {
+    return null;
   }
 
-  const rect = element.getBoundingClientRect();
+  const subtitlePath = state.subtitlePath;
+  const label = state.hasCompletedAnalysis
+    ? "Run flagged-sections analysis again"
+    : "Run flagged-sections analysis";
+
   return (
-    position.x >= rect.left &&
-    position.x <= rect.right &&
-    position.y >= rect.top &&
-    position.y <= rect.bottom
+    <Button
+      type="button"
+      size="icon"
+      variant={state.hasCompletedAnalysis ? "secondary" : "outline"}
+      title={label}
+      aria-label={label}
+      disabled={state.isActive}
+      onClick={() => onClick(subtitlePath)}
+    >
+      {state.isActive || state.isStarting ? (
+        <LoaderCircle className="size-3.5 animate-spin" />
+      ) : (
+        <ShieldAlert className="size-3.5" />
+      )}
+    </Button>
+  );
+};
+
+const ProcessedVideoQuickActions = ({
+  analysisOutputByInputPath,
+  analysisJobByInputPath,
+  launchingQuickActionId,
+  onSendToCut,
+  onSendToAnalysis,
+  onSendToTranscription,
+  processedVideoPath,
+  queuedAnalysisPaths,
+  queuedTranscriptionPaths,
+  transcriptionJobByInputPath,
+  transcriptionOutputByInputPath,
+}: ProcessedVideoQuickActionsProps) => {
+  const subtitlePath = transcriptionOutputByInputPath[processedVideoPath];
+  const transcriptionJob = transcriptionJobByInputPath[processedVideoPath];
+  const transcriptionState = buildTranscriptionQuickActionState({
+    job: transcriptionJob,
+    launchingQuickActionId,
+    processedVideoPath,
+    queuedTranscriptionPaths,
+  });
+  const analysisState = buildAnalysisQuickActionState({
+    analysisJobByInputPath,
+    analysisOutputByInputPath,
+    launchingQuickActionId,
+    queuedAnalysisPaths,
+    subtitlePath,
+  });
+
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <div className="flex items-center gap-1">
+        <TranscriptionQuickActionButton
+          onClick={() => onSendToTranscription(processedVideoPath)}
+          state={transcriptionState}
+        />
+        <AnalysisQuickActionButton onClick={onSendToAnalysis} state={analysisState} />
+        <Button
+          type="button"
+          size="icon"
+          variant="outline"
+          title="Open this video in Edit Video"
+          aria-label="Open this video in Edit Video"
+          onClick={() => onSendToCut(processedVideoPath)}
+        >
+          <Scissors className="size-3.5" />
+        </Button>
+      </div>
+      <div className="flex flex-wrap justify-end gap-1">
+        <QuickActionStatusBadge
+          isQueued={transcriptionState.isQueued}
+          job={transcriptionJob}
+          label="Transcript"
+        />
+        <QuickActionStatusBadge
+          isQueued={analysisState.isQueued}
+          job={analysisState.job}
+          label="Analyze"
+        />
+      </div>
+    </div>
   );
 };
 
@@ -198,152 +320,28 @@ const resolveDroppedPaths = async (paths: string[]) => {
   return dedupePaths(resolvedPaths.flat());
 };
 
-const updateDropTargetState = (
-  targetRef: RefObject<HTMLDivElement | null>,
-  position: { x: number; y: number },
-  setIsDropTargetActive: (value: boolean) => void,
-) => {
-  setIsDropTargetActive(isWithinDropTarget(targetRef, position));
-};
-
-const handleDragDropEvent = async ({
-  event,
-  mounted,
-  dropTargetRef,
-  onAddResolvedInputPaths,
-  setIsDropTargetActive,
-  setIsResolvingDrop,
+const DismissibleError = ({
+  message,
+  onDismiss,
 }: {
-  event: { payload: DragDropEvent };
-  mounted: boolean;
-  dropTargetRef: RefObject<HTMLDivElement | null>;
-  onAddResolvedInputPaths: (paths: string[]) => void;
-  setIsDropTargetActive: (value: boolean) => void;
-  setIsResolvingDrop: (value: boolean) => void;
+  message: string | null;
+  onDismiss: () => void;
 }) => {
-  if (!mounted) {
-    return;
+  if (!message) {
+    return null;
   }
-
-  if (event.payload.type === "leave") {
-    setIsDropTargetActive(false);
-    return;
-  }
-
-  if (event.payload.type === "over" || event.payload.type === "enter") {
-    updateDropTargetState(dropTargetRef, event.payload.position, setIsDropTargetActive);
-    return;
-  }
-
-  const droppedInsideTarget = isWithinDropTarget(dropTargetRef, event.payload.position);
-  setIsDropTargetActive(false);
-  if (!droppedInsideTarget) {
-    return;
-  }
-
-  setIsResolvingDrop(true);
-  try {
-    onAddResolvedInputPaths(await resolveDroppedPaths(event.payload.paths));
-  } finally {
-    if (mounted) {
-      setIsResolvingDrop(false);
-    }
-  }
-};
-
-const CompletedJobActions = ({
-  analysisOutputByInputPath,
-  busyDetectPath,
-  job,
-  busyTrashPath,
-  busyTranscribePath,
-  isOriginalTrashed,
-  onOpenOutput,
-  onSendToProfanity,
-  onSendToCut,
-  onSendToTranscription,
-  onTrashOriginal,
-  setBusyDetectPath,
-  setBusyTrashPath,
-  setBusyTranscribePath,
-  transcriptionOutputByInputPath,
-  setTrashedPaths,
-}: CompletedJobActionsProps) => {
-  const outputPath = job.outputPath;
 
   return (
-    <div className="mt-1.5 space-y-1">
-      <div className="rounded-[12px] border border-[#ead3c4] bg-white/80 px-2 py-1.5">
-        <div className="flex items-center justify-between gap-2">
-          <div className="min-w-0">
-            <p className="font-medium text-[#5f2823] text-xs uppercase tracking-[0.12em]">
-              Original
-            </p>
-            <p className="mt-0.5 truncate text-[#7f524a] text-xs" title={job.inputPath}>
-              {job.inputPath}
-            </p>
-          </div>
-          <Button
-            type="button"
-            size="sm"
-            variant={isOriginalTrashed ? "ghost" : "danger"}
-            disabled={isOriginalTrashed || busyTrashPath === job.inputPath}
-            onClick={async () => {
-              setBusyTrashPath(job.inputPath);
-              try {
-                await onTrashOriginal(job.inputPath);
-                setTrashedPaths((previous) => [...previous, job.inputPath]);
-              } finally {
-                setBusyTrashPath(null);
-              }
-            }}
-          >
-            {busyTrashPath === job.inputPath ? (
-              <LoaderCircle className="size-3 animate-spin" />
-            ) : (
-              <Trash2 className="size-3" />
-            )}
-            {isOriginalTrashed ? "Trashed" : "Trash"}
-          </Button>
-        </div>
+    <div className="rounded-[12px] border border-rose-200 bg-rose-50 px-2.5 py-2 text-rose-800 text-xs">
+      <div className="flex items-start justify-between gap-3">
+        <p className="flex items-center gap-1.5 font-medium">
+          <AlertCircle className="size-3" />
+          {message}
+        </p>
+        <Button type="button" variant="ghost" size="sm" onClick={onDismiss}>
+          Dismiss
+        </Button>
       </div>
-      {outputPath ? (
-        <div className="rounded-[12px] border border-[#ead3c4] bg-white/80 px-2 py-1.5">
-          <div className="flex items-center justify-between gap-2">
-            <div className="min-w-0">
-              <p className="font-medium text-[#5f2823] text-xs uppercase tracking-[0.12em]">
-                Processed
-              </p>
-              <p className="mt-0.5 truncate text-[#7f524a] text-xs" title={outputPath}>
-                {outputPath}
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-1">
-              <ProcessedVideoQuickActions
-                analysisOutputByInputPath={analysisOutputByInputPath}
-                busyDetectPath={busyDetectPath}
-                busyTranscribePath={busyTranscribePath}
-                onSendToCut={onSendToCut}
-                onSendToProfanity={onSendToProfanity}
-                onSendToTranscription={onSendToTranscription}
-                processedVideoPath={outputPath}
-                setBusyDetectPath={setBusyDetectPath}
-                setBusyTranscribePath={setBusyTranscribePath}
-                transcriptionOutputByInputPath={transcriptionOutputByInputPath}
-              />
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => onOpenOutput(outputPath)}
-              >
-                <FileAudio2 className="size-3" />
-                Open
-              </Button>
-            </div>
-          </div>
-        </div>
-      ) : null}
     </div>
   );
 };
@@ -351,7 +349,14 @@ const CompletedJobActions = ({
 const RemoveMusicPanel = ({
   isActive,
   selectedInputPaths,
+  autoTranscribePaths,
+  autoAnalyzePaths,
+  onToggleAutoTranscribe,
+  onToggleAutoAnalyze,
+  onToggleAllAutoTranscribe,
+  onToggleAllAutoAnalyze,
   isStartingBatch,
+  isBatchActive,
   workerStatus,
   workerMessage,
   progressPct,
@@ -363,23 +368,19 @@ const RemoveMusicPanel = ({
   onClearSelectedInputs,
   onStart,
   onCancel,
-  onOpenOutput,
   onSendToCut,
-  onSendToProfanity,
+  onSendToAnalysis,
   onSendToTranscription,
-  onTrashOriginal,
   transcriptionOutputByInputPath,
   analysisOutputByInputPath,
+  transcriptionJobByInputPath,
+  analysisJobByInputPath,
+  queuedTranscriptionPaths,
+  queuedAnalysisPaths,
+  launchingQuickActionId,
   onClearError,
 }: RemoveMusicPanelProps) => {
-  const [isResolvingDrop, setIsResolvingDrop] = useState(false);
-  const [isDropTargetActive, setIsDropTargetActive] = useState(false);
-  const [busyDetectPath, setBusyDetectPath] = useState<string | null>(null);
-  const [busyTrashPath, setBusyTrashPath] = useState<string | null>(null);
-  const [busyTranscribePath, setBusyTranscribePath] = useState<string | null>(null);
-  const [trashedPaths, setTrashedPaths] = useState<string[]>([]);
-  const dropTargetRef = useRef<HTMLDivElement>(null);
-  const jobInputPaths = useMemo(() => jobs.map((job) => job.inputPath), [jobs]);
+  const [dropErrorMessage, setDropErrorMessage] = useState<string | null>(null);
   const jobsByInputPath = useMemo(
     () =>
       jobs.reduce<Record<string, JobRecord>>((index, job) => {
@@ -390,46 +391,22 @@ const RemoveMusicPanel = ({
   );
 
   useEffect(() => {
-    setTrashedPaths((previous) => previous.filter((path) => jobInputPaths.includes(path)));
-  }, [jobInputPaths]);
-
-  useEffect(() => {
     if (!isActive) {
-      setIsDropTargetActive(false);
-      return;
+      setDropErrorMessage(null);
     }
+  }, [isActive]);
 
-    let mounted = true;
-
-    const setup = async () => {
-      const unlisten = await getCurrentWindow().onDragDropEvent((event) =>
-        handleDragDropEvent({
-          dropTargetRef,
-          event,
-          mounted,
-          onAddResolvedInputPaths,
-          setIsDropTargetActive,
-          setIsResolvingDrop,
-        }),
-      );
-
-      return unlisten;
-    };
-
-    let cleanup: (() => void) | undefined;
-    setup()
-      .then((unlisten) => {
-        cleanup = unlisten;
-      })
-      .catch(() => {
-        setIsDropTargetActive(false);
-      });
-
-    return () => {
-      mounted = false;
-      cleanup?.();
-    };
-  }, [isActive, onAddResolvedInputPaths]);
+  const { dropTargetRef, isDropTargetActive, isResolvingDrop } = useTauriFileDrop<HTMLDivElement>({
+    enabled: isActive,
+    onDrop: (paths) => {
+      setDropErrorMessage(null);
+      onAddResolvedInputPaths(paths);
+    },
+    onError: (error: unknown) => {
+      setDropErrorMessage(error instanceof Error ? error.message : "Unable to read dropped paths.");
+    },
+    resolvePaths: resolveDroppedPaths,
+  });
 
   return (
     <div className="space-y-2">
@@ -446,67 +423,6 @@ const RemoveMusicPanel = ({
               Process MP4/MOV files. Outputs saved to `audio_replaced/` folders.
             </p>
           </div>
-          <TaskDrawer
-            triggerLabel="Open Queue"
-            title="Batch Queue"
-            description="Log output and file status for the latest batch."
-          >
-            <div className="space-y-1.5">
-              {jobs.length === 0 ? (
-                <p className="rounded-[12px] border border-[#e7d2c5] border-dashed bg-[#fff8f3] px-2.5 py-2.5 text-[#8f5e56] text-xs">
-                  No jobs yet. Start a batch to populate this queue.
-                </p>
-              ) : (
-                jobs.map((job) => {
-                  const isOriginalTrashed = trashedPaths.includes(job.inputPath);
-                  return (
-                    <div
-                      key={job.jobId}
-                      className="rounded-[12px] border border-[#ead3c4] bg-[#fffaf7] px-2 py-1.5"
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <p
-                            className="truncate font-medium text-[#5f2823] text-xs"
-                            title={job.inputPath}
-                          >
-                            {job.fileName}
-                          </p>
-                          <p className="mt-0.5 text-[#9e6d63] text-xs">
-                            {job.progressPct}% complete
-                          </p>
-                        </div>
-                        <Badge variant={toStatusVariant(job.status)}>{job.status}</Badge>
-                      </div>
-                      <Progress className="mt-1.5 h-1.5" value={job.progressPct} />
-                      {job.status === "completed" ? (
-                        <CompletedJobActions
-                          analysisOutputByInputPath={analysisOutputByInputPath}
-                          busyDetectPath={busyDetectPath}
-                          job={job}
-                          busyTrashPath={busyTrashPath}
-                          busyTranscribePath={busyTranscribePath}
-                          isOriginalTrashed={isOriginalTrashed}
-                          onOpenOutput={onOpenOutput}
-                          onSendToCut={onSendToCut}
-                          onSendToProfanity={onSendToProfanity}
-                          onSendToTranscription={onSendToTranscription}
-                          onTrashOriginal={onTrashOriginal}
-                          setBusyDetectPath={setBusyDetectPath}
-                          setBusyTrashPath={setBusyTrashPath}
-                          setBusyTranscribePath={setBusyTranscribePath}
-                          transcriptionOutputByInputPath={transcriptionOutputByInputPath}
-                          setTrashedPaths={setTrashedPaths}
-                        />
-                      ) : null}
-                      <LogOutput logs={job.logs ?? []} />
-                      {job.error ? <p className="mt-3 text-rose-700 text-xs">{job.error}</p> : null}
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </TaskDrawer>
         </CardHeader>
         <CardContent className="space-y-2">
           <div
@@ -554,6 +470,30 @@ const RemoveMusicPanel = ({
                   {selectedInputPaths.length} file{selectedInputPaths.length === 1 ? "" : "s"}{" "}
                   selected
                 </p>
+                {selectedInputPaths.length > 0 &&
+                onToggleAllAutoTranscribe &&
+                onToggleAllAutoAnalyze ? (
+                  <div className="flex items-center gap-3">
+                    <label className="flex cursor-pointer select-none items-center gap-1.5 font-medium text-[#8f5e56] text-xs">
+                      <input
+                        type="checkbox"
+                        checked={selectedInputPaths.every((path) => autoTranscribePaths[path])}
+                        onChange={(e) => onToggleAllAutoTranscribe(e.target.checked)}
+                        className="size-3.5 rounded border-[#d9b7a5] text-[#88322d] accent-[#88322d] focus:ring-[#c57267]/25"
+                      />
+                      Transcribe All
+                    </label>
+                    <label className="flex cursor-pointer select-none items-center gap-1.5 font-medium text-[#8f5e56] text-xs">
+                      <input
+                        type="checkbox"
+                        checked={selectedInputPaths.every((path) => autoAnalyzePaths[path])}
+                        onChange={(e) => onToggleAllAutoAnalyze(e.target.checked)}
+                        className="size-3.5 rounded border-[#d9b7a5] text-[#88322d] accent-[#88322d] focus:ring-[#c57267]/25"
+                      />
+                      Analyze All
+                    </label>
+                  </div>
+                ) : null}
               </div>
               {selectedInputPaths.length === 0 ? (
                 <p className="rounded-[12px] border border-[#ead3c4] bg-white/70 px-2 py-1.5 text-[#9e6d63] text-xs">
@@ -568,19 +508,42 @@ const RemoveMusicPanel = ({
                         ? job.outputPath
                         : null;
 
+                    const isTranscribeChecked = Boolean(autoTranscribePaths[path]);
+                    const isAnalyzeChecked = Boolean(autoAnalyzePaths[path]);
+
                     return (
                       <div
                         key={path}
                         className="rounded-[12px] border border-[#ead3c4] bg-white/80 px-2 py-1.5"
                       >
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="min-w-0 flex-1">
                             <p className="truncate font-medium text-[#5f2823] text-xs" title={path}>
                               {toFileName(path)}
                             </p>
                             <p className="mt-0.5 truncate text-[#9e6d63] text-xs" title={path}>
                               {path}
                             </p>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-3">
+                            <label className="flex cursor-pointer select-none items-center gap-1.5 font-medium text-[#5f2823] text-xs">
+                              <input
+                                type="checkbox"
+                                checked={isTranscribeChecked}
+                                onChange={(e) => onToggleAutoTranscribe(path, e.target.checked)}
+                                className="size-3.5 rounded border-[#d9b7a5] text-[#88322d] accent-[#88322d] focus:ring-[#c57267]/25"
+                              />
+                              Transcribe
+                            </label>
+                            <label className="flex cursor-pointer select-none items-center gap-1.5 font-medium text-[#5f2823] text-xs">
+                              <input
+                                type="checkbox"
+                                checked={isAnalyzeChecked}
+                                onChange={(e) => onToggleAutoAnalyze(path, e.target.checked)}
+                                className="size-3.5 rounded border-[#d9b7a5] text-[#88322d] accent-[#88322d] focus:ring-[#c57267]/25"
+                              />
+                              Analyze
+                            </label>
                           </div>
                           <div className="flex shrink-0 items-center gap-1">
                             {job ? (
@@ -589,14 +552,15 @@ const RemoveMusicPanel = ({
                             {processedOutputPath ? (
                               <ProcessedVideoQuickActions
                                 analysisOutputByInputPath={analysisOutputByInputPath}
-                                busyDetectPath={busyDetectPath}
-                                busyTranscribePath={busyTranscribePath}
+                                analysisJobByInputPath={analysisJobByInputPath}
+                                launchingQuickActionId={launchingQuickActionId}
                                 onSendToCut={onSendToCut}
-                                onSendToProfanity={onSendToProfanity}
+                                onSendToAnalysis={onSendToAnalysis}
                                 onSendToTranscription={onSendToTranscription}
                                 processedVideoPath={processedOutputPath}
-                                setBusyDetectPath={setBusyDetectPath}
-                                setBusyTranscribePath={setBusyTranscribePath}
+                                queuedAnalysisPaths={queuedAnalysisPaths}
+                                queuedTranscriptionPaths={queuedTranscriptionPaths}
+                                transcriptionJobByInputPath={transcriptionJobByInputPath}
                                 transcriptionOutputByInputPath={transcriptionOutputByInputPath}
                               />
                             ) : null}
@@ -630,7 +594,12 @@ const RemoveMusicPanel = ({
               <p className="text-[#7f524a] text-xs">{workerMessage}</p>
             </div>
             <div className="flex flex-wrap gap-1.5">
-              <Button type="button" size="sm" onClick={onStart} disabled={isStartingBatch}>
+              <Button
+                type="button"
+                size="sm"
+                onClick={onStart}
+                disabled={isStartingBatch || isBatchActive}
+              >
                 {isStartingBatch ? (
                   <LoaderCircle className="size-3 animate-spin" />
                 ) : (
@@ -638,30 +607,28 @@ const RemoveMusicPanel = ({
                 )}
                 Start Batch
               </Button>
-              <Button type="button" size="sm" variant="danger" onClick={onCancel}>
+              <Button
+                type="button"
+                size="sm"
+                variant="danger"
+                onClick={onCancel}
+                disabled={!isBatchActive}
+              >
                 <OctagonX className="size-3" />
                 Cancel
               </Button>
             </div>
           </div>
 
-          {errorMessage ? (
-            <div className="rounded-[12px] border border-rose-200 bg-rose-50 px-2.5 py-2 text-rose-800 text-xs">
-              <div className="flex items-start justify-between gap-3">
-                <p className="flex items-center gap-1.5 font-medium">
-                  <AlertCircle className="size-3" />
-                  {errorMessage}
-                </p>
-                <Button type="button" variant="ghost" size="sm" onClick={onClearError}>
-                  Dismiss
-                </Button>
-              </div>
-            </div>
-          ) : null}
+          <DismissibleError
+            message={dropErrorMessage}
+            onDismiss={() => setDropErrorMessage(null)}
+          />
+          <DismissibleError message={errorMessage} onDismiss={onClearError} />
         </CardContent>
       </Card>
     </div>
   );
 };
 
-export { RemoveMusicPanel };
+export default RemoveMusicPanel;

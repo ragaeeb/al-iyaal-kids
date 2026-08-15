@@ -1,6 +1,5 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { openPath } from "@tauri-apps/plugin-opener";
-import { useEffect, useReducer } from "react";
+import { useEffect, useReducer, useRef } from "react";
 
 import { batchReducer, createInitialBatchUiState } from "@/features/batch/reducer";
 import {
@@ -9,24 +8,82 @@ import {
   selectSortedJobs,
 } from "@/features/batch/selectors";
 import { cancelBatch, startBatch, subscribeToBatchEvents } from "@/features/batch/transport";
+import type { BatchEvent } from "@/features/batch/types";
 import {
   buildStartBatchRequest,
   createInitialBatchState,
   dedupePaths,
+  isActiveBatchStatus,
   isSupportedVideoPath,
+  toCancelOutcome,
 } from "@/features/batch/utils";
 import { listVideos } from "@/features/media/transport";
+import {
+  appendBoundedEvent,
+  clearBoundedEventBuffer,
+  createBoundedEventBuffer,
+  drainBoundedEventBuffer,
+} from "@/features/shared/bounded-event-buffer";
+
+const MAX_PRE_REGISTRATION_BATCH_EVENTS = 256;
+
+const getBatchStartBlockReason = ({
+  hasActiveBatch,
+  hasInputs,
+  isStartPending,
+}: {
+  hasActiveBatch: boolean;
+  hasInputs: boolean;
+  isStartPending: boolean;
+}) => {
+  if (isStartPending) {
+    return "A batch start request is already in progress.";
+  }
+
+  if (hasActiveBatch) {
+    return "Wait for the active batch to finish or request cancellation before starting another.";
+  }
+
+  if (!hasInputs) {
+    return "Select or drop at least one .mp4 or .mov file before starting.";
+  }
+
+  return null;
+};
 
 export const useBatchController = () => {
   const [state, dispatch] = useReducer(batchReducer, undefined, createInitialBatchUiState);
+  const registeredBatchIdsRef = useRef(new Set<string>());
+  const preRegistrationEventsRef = useRef(
+    createBoundedEventBuffer<Exclude<BatchEvent, { type: "worker_status" }>>(
+      MAX_PRE_REGISTRATION_BATCH_EVENTS,
+    ),
+  );
+  const isStartPendingRef = useRef(false);
 
   useEffect(() => {
-    let mounted = true;
+    let disposed = false;
     let unlisten: (() => void) | null = null;
 
     const setup = async () => {
-      unlisten = await subscribeToBatchEvents((event) => {
-        if (!mounted) {
+      const registeredUnlisten = await subscribeToBatchEvents((event) => {
+        if (disposed) {
+          return;
+        }
+
+        if (event.type === "worker_status") {
+          dispatch({
+            payload: event,
+            type: "apply_event",
+          });
+          return;
+        }
+
+        if (!registeredBatchIdsRef.current.has(event.batchId)) {
+          preRegistrationEventsRef.current = appendBoundedEvent(
+            preRegistrationEventsRef.current,
+            event,
+          );
           return;
         }
 
@@ -35,9 +92,20 @@ export const useBatchController = () => {
           type: "apply_event",
         });
       });
+
+      if (disposed) {
+        registeredUnlisten();
+        return;
+      }
+
+      unlisten = registeredUnlisten;
     };
 
     setup().catch((error: unknown) => {
+      if (disposed) {
+        return;
+      }
+
       dispatch({
         payload: error instanceof Error ? error.message : "Failed to subscribe to worker events.",
         type: "start_batch_error",
@@ -45,8 +113,10 @@ export const useBatchController = () => {
     });
 
     return () => {
-      mounted = false;
+      disposed = true;
       unlisten?.();
+      registeredBatchIdsRef.current.clear();
+      preRegistrationEventsRef.current = clearBoundedEventBuffer(preRegistrationEventsRef.current);
     };
   }, []);
 
@@ -64,7 +134,10 @@ export const useBatchController = () => {
       multiple: true,
     });
     const nextPaths = Array.isArray(response) ? response : response ? [response] : [];
-    setSelectedInputPaths([...state.selectedInputPaths, ...nextPaths]);
+    dispatch({
+      payload: nextPaths,
+      type: "add_selected_input_paths",
+    });
   };
 
   const addInputFolder = async () => {
@@ -76,22 +149,37 @@ export const useBatchController = () => {
 
     const videos = await listVideos(folder);
     const nextPaths = videos.map((video) => video.path);
-    setSelectedInputPaths([...state.selectedInputPaths, ...nextPaths]);
+    dispatch({
+      payload: nextPaths,
+      type: "add_selected_input_paths",
+    });
   };
 
   const addResolvedInputPaths = (paths: string[]) => {
-    setSelectedInputPaths([...state.selectedInputPaths, ...paths]);
+    dispatch({
+      payload: paths,
+      type: "add_selected_input_paths",
+    });
   };
 
   const start = async () => {
-    if (state.selectedInputPaths.length === 0) {
+    const currentBatch = selectActiveBatch(state);
+    const blockReason = getBatchStartBlockReason({
+      hasActiveBatch: Boolean(currentBatch && isActiveBatchStatus(currentBatch.status)),
+      hasInputs: state.selectedInputPaths.length > 0,
+      isStartPending: isStartPendingRef.current,
+    });
+    if (blockReason) {
       dispatch({
-        payload: "Select or drop at least one .mp4 or .mov file before starting.",
+        payload: blockReason,
         type: "start_batch_error",
       });
       return;
     }
 
+    isStartPendingRef.current = true;
+    registeredBatchIdsRef.current.clear();
+    preRegistrationEventsRef.current = clearBoundedEventBuffer(preRegistrationEventsRef.current);
     dispatch({
       type: "start_batch_request",
     });
@@ -100,15 +188,29 @@ export const useBatchController = () => {
       const request = buildStartBatchRequest(state.selectedInputPaths);
       const response = await startBatch(request);
       const initialPaths = response.inputPaths.filter((path) => isSupportedVideoPath(path));
+      registeredBatchIdsRef.current.add(response.batchId);
       dispatch({
         payload: createInitialBatchState(response.batchId, initialPaths),
         type: "start_batch_success",
       });
+
+      const drained = drainBoundedEventBuffer(preRegistrationEventsRef.current);
+      preRegistrationEventsRef.current = drained.buffer;
+      for (const event of drained.events.filter((event) => event.batchId === response.batchId)) {
+        dispatch({
+          payload: event,
+          type: "apply_event",
+        });
+      }
     } catch (error: unknown) {
+      registeredBatchIdsRef.current.clear();
+      preRegistrationEventsRef.current = clearBoundedEventBuffer(preRegistrationEventsRef.current);
       dispatch({
         payload: error instanceof Error ? error.message : "Unable to start batch.",
         type: "start_batch_error",
       });
+    } finally {
+      isStartPendingRef.current = false;
     }
   };
 
@@ -118,9 +220,21 @@ export const useBatchController = () => {
     }
 
     try {
-      await cancelBatch({
+      const response = await cancelBatch({
         batchId: state.activeBatchId,
         mode: "stop_after_current",
+      });
+      const outcome = toCancelOutcome(response);
+      if (outcome.accepted) {
+        dispatch({
+          type: "cancel_batch_accepted",
+        });
+        return;
+      }
+
+      dispatch({
+        payload: outcome.errorMessage,
+        type: "start_batch_error",
       });
     } catch (error: unknown) {
       dispatch({
@@ -130,11 +244,8 @@ export const useBatchController = () => {
     }
   };
 
-  const openOutput = async (path: string) => {
-    await openPath(path);
-  };
-
   const activeBatch = selectActiveBatch(state);
+  const isActive = activeBatch ? isActiveBatchStatus(activeBatch.status) : false;
 
   return {
     activeBatch,
@@ -146,8 +257,8 @@ export const useBatchController = () => {
       dispatch({
         type: "clear_error",
       }),
+    isActive,
     jobs: activeBatch ? selectSortedJobs(activeBatch.jobs) : [],
-    openOutput,
     progressPct: selectBatchProgress(state),
     setSelectedInputPaths,
     start,

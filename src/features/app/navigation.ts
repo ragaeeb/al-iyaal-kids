@@ -1,6 +1,6 @@
-import { ChartColumn, LayoutGrid, Scissors, Settings2, WandSparkles } from "lucide-react";
+import { LayoutGrid, Scissors, Settings2, WandSparkles } from "lucide-react";
 
-export type AppPage = "dashboard" | "remove-music" | "cut-video" | "analytics" | "settings";
+export type AppPage = "dashboard" | "remove-music" | "cut-video" | "settings";
 
 export type AppPageDefinition = {
   key: AppPage;
@@ -30,12 +30,6 @@ export const appPages: AppPageDefinition[] = [
     label: "Edit Video",
   },
   {
-    description: "Processing stats and history.",
-    icon: ChartColumn,
-    key: "analytics",
-    label: "Analytics",
-  },
-  {
     description: "AI keys and preferences.",
     icon: Settings2,
     key: "settings",
@@ -44,6 +38,17 @@ export const appPages: AppPageDefinition[] = [
 ];
 
 export const defaultAppPage: AppPage = "dashboard";
+
+export const addVisitedPage = (
+  visitedPages: ReadonlySet<AppPage>,
+  page: AppPage,
+): ReadonlySet<AppPage> => {
+  if (visitedPages.has(page)) {
+    return visitedPages;
+  }
+
+  return new Set([...visitedPages, page]);
+};
 
 export const getPageDefinition = (page: AppPage): AppPageDefinition => {
   if (page === "dashboard") {

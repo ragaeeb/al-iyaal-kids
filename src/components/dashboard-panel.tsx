@@ -1,10 +1,10 @@
-import { ChartColumn, ShieldCheck, WandSparkles } from "lucide-react";
+import { ShieldCheck, WandSparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { type AppPage, appPages } from "@/features/app/navigation";
 
-import logoPng from "../../logo.png";
+import logoPng from "../../src-tauri/icons/128x128.png";
 
 type DashboardPanelProps = {
   onNavigate: (page: AppPage) => void;
@@ -26,7 +26,7 @@ const DashboardPanel = ({ onNavigate }: DashboardPanelProps) => {
             <p className="font-medium text-[#9e5c50] text-xs uppercase tracking-[0.2em]">
               al-Iyaal Kids
             </p>
-            <h2 className="mt-1 text-base text-[#88322d] tracking-tight">
+            <h2 className="mt-1 text-[#88322d] text-base tracking-tight">
               Media tools for Muslim families
             </h2>
             <p className="mt-0.5 max-w-3xl text-[#7f524a] text-xs leading-4">
@@ -37,10 +37,6 @@ const DashboardPanel = ({ onNavigate }: DashboardPanelProps) => {
               <Button type="button" size="sm" onClick={() => onNavigate("remove-music")}>
                 <WandSparkles className="size-3" />
                 Open Remove Music
-              </Button>
-              <Button type="button" size="sm" variant="secondary" onClick={() => onNavigate("analytics")}>
-                <ChartColumn className="size-3" />
-                View Analytics
               </Button>
             </div>
           </div>
@@ -58,12 +54,12 @@ const DashboardPanel = ({ onNavigate }: DashboardPanelProps) => {
         </CardHeader>
         <CardContent className="space-y-1 text-[#7f524a] text-xs leading-4">
           <p>No telemetry sent.</p>
-          <p>History and stats stay offline.</p>
-          <p>Tools run entirely on-device.</p>
+          <p>Your media stays on this device.</p>
+          <p>Core workflows run on-device; subtitle moderation can use opted-in providers.</p>
         </CardContent>
       </Card>
 
-      <div className="grid gap-2 lg:col-span-2 lg:grid-cols-5 sm:grid-cols-3">
+      <div className="grid gap-2 sm:grid-cols-3 lg:col-span-2 lg:grid-cols-5">
         {appPages.map((page) => {
           const Icon = page.icon;
 

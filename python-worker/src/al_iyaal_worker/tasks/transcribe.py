@@ -7,6 +7,7 @@ import subprocess
 from ..commands import build_transcribe_command
 from ..filesystem import to_job_id
 from ..models import StartTranscriptionBatchCommand
+from ..staged_output import commit_staged_output, staged_output_path
 from ..subtitles import sidecar_srt_path
 from .events import (
     emit_job_log,
@@ -76,28 +77,93 @@ def process_transcription_batch(
         )
         emit_task_job_progress(emit, command.task_id, "transcription", job_id, 3)
 
-        transcribe_command = build_transcribe_command(
-            yap_path=yap_path,
-            video_path=video_path,
-            output_srt_path=srt_path,
-        )
-        command_preview = _sanitize_command_preview(transcribe_command, video_path, srt_path)
-        emit_job_log(
-            emit,
-            command.task_id,
-            "transcription",
-            job_id,
-            f"Command: {command_preview}",
-        )
-
         try:
-            process = subprocess.Popen(  # noqa: S603
-                transcribe_command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                env={**os.environ, "NSUnbufferedIO": "YES"},
-            )
+            with staged_output_path(srt_path) as staged_srt_path:
+                transcribe_command = build_transcribe_command(
+                    yap_path=yap_path,
+                    video_path=video_path,
+                    output_srt_path=staged_srt_path,
+                )
+                command_preview = _sanitize_command_preview(
+                    transcribe_command,
+                    video_path,
+                    staged_srt_path,
+                )
+                emit_job_log(
+                    emit,
+                    command.task_id,
+                    "transcription",
+                    job_id,
+                    f"Command: {command_preview}",
+                )
+
+                process = subprocess.Popen(  # noqa: S603
+                    transcribe_command,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    env={**os.environ, "NSUnbufferedIO": "YES"},
+                )
+
+                max_progress = 3
+                stdout_pipe = process.stdout
+                if stdout_pipe is not None:
+                    for line in stdout_pipe:
+                        stripped_line = line.strip()
+                        if stripped_line:
+                            emit_job_log(
+                                emit,
+                                command.task_id,
+                                "transcription",
+                                job_id,
+                                stripped_line,
+                            )
+                        progress = parse_yap_progress_line(line)
+                        if progress is None:
+                            continue
+                        percent, _message = progress
+                        mapped_progress = 3 + int(percent * 0.9)
+                        if mapped_progress > max_progress:
+                            max_progress = mapped_progress
+                            emit_task_job_progress(
+                                emit,
+                                command.task_id,
+                                "transcription",
+                                job_id,
+                                mapped_progress,
+                            )
+
+                return_code = process.wait()
+                emit_job_log(
+                    emit,
+                    command.task_id,
+                    "transcription",
+                    job_id,
+                    f"Transcription process exited with code {return_code}",
+                )
+                if return_code != 0:
+                    failed_count += 1
+                    emit_task_job_error(
+                        emit,
+                        command.task_id,
+                        "transcription",
+                        job_id,
+                        f"Transcription failed with exit code {return_code}.",
+                    )
+                    continue
+
+                if not staged_srt_path.exists():
+                    failed_count += 1
+                    emit_task_job_error(
+                        emit,
+                        command.task_id,
+                        "transcription",
+                        job_id,
+                        f"Missing transcript output: {srt_path.name}",
+                    )
+                    continue
+
+                commit_staged_output(staged_srt_path, srt_path)
         except Exception as error:
             failed_count += 1
             emit_task_job_error(
@@ -105,65 +171,7 @@ def process_transcription_batch(
                 command.task_id,
                 "transcription",
                 job_id,
-                f"Failed to start transcription command: {error}",
-            )
-            continue
-
-        max_progress = 3
-        stdout_pipe = process.stdout
-        if stdout_pipe is not None:
-            for line in stdout_pipe:
-                stripped_line = line.strip()
-                if stripped_line:
-                    emit_job_log(
-                        emit,
-                        command.task_id,
-                        "transcription",
-                        job_id,
-                        stripped_line,
-                    )
-                progress = parse_yap_progress_line(line)
-                if progress is None:
-                    continue
-                percent, _message = progress
-                mapped_progress = 3 + int(percent * 0.9)
-                if mapped_progress > max_progress:
-                    max_progress = mapped_progress
-                    emit_task_job_progress(
-                        emit,
-                        command.task_id,
-                        "transcription",
-                        job_id,
-                        mapped_progress,
-                    )
-
-        return_code = process.wait()
-        emit_job_log(
-            emit,
-            command.task_id,
-            "transcription",
-            job_id,
-            f"Transcription process exited with code {return_code}",
-        )
-        if return_code != 0:
-            failed_count += 1
-            emit_task_job_error(
-                emit,
-                command.task_id,
-                "transcription",
-                job_id,
-                f"Transcription failed with exit code {return_code}.",
-            )
-            continue
-
-        if not srt_path.exists():
-            failed_count += 1
-            emit_task_job_error(
-                emit,
-                command.task_id,
-                "transcription",
-                job_id,
-                f"Missing transcript output: {srt_path.name}",
+                f"Transcription execution failed: {error}",
             )
             continue
 

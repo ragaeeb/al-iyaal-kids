@@ -65,6 +65,22 @@ export type StartCutJobRequest = {
   compressionPreset: CompressionPreset;
 };
 
+export type SaveCutRangesRequest = {
+  videoPath: string;
+  ranges: CutRange[];
+};
+
+export type SaveAnalysisSidecarRequest = {
+  videoPath: string;
+  content: string;
+};
+
+export type AnalysisPromptPreviewRequest = {
+  engine: ModerationEngine;
+  contentCriteria: string;
+  priorityGuidelines: string;
+};
+
 export type CutJobStartedResponse = {
   taskId: string;
   videoPath: string;
@@ -97,6 +113,7 @@ export type SrtListItem = {
 };
 
 export type FlaggedSegment = {
+  cueIndex?: number;
   startTime: number;
   endTime?: number;
   text: string;
@@ -114,12 +131,32 @@ export type ModerationRule = {
   patterns: string[];
 };
 
-export type ModerationEngine = "blacklist" | "gemini" | "nova_pro";
+export type AnalysisAgentId = "codex" | "antigravity" | "kiro_cli" | "opencode";
+export type ModerationEngine = "blacklist" | "gemini" | "nova_pro" | AnalysisAgentId;
 export type AnalysisStrategy = "fast" | "deep";
+
+export type AnalysisAgentModel = {
+  id: string;
+  label: string;
+  reasoningLevels: string[];
+  defaultReasoningLevel?: string;
+};
+
+export type AnalysisAgentCapability = {
+  id: AnalysisAgentId;
+  label: string;
+  installed: boolean;
+  executableName?: string;
+  models: AnalysisAgentModel[];
+  defaultModel?: string;
+  error?: string;
+};
 
 export type ModerationSettings = {
   engine: ModerationEngine;
   analysisStrategy: AnalysisStrategy;
+  agentModel: string;
+  agentReasoningLevel: string;
   googleApiKey: string;
   amazonNovaApiKey: string;
   contentCriteria: string;
@@ -129,11 +166,29 @@ export type ModerationSettings = {
 };
 
 export type AnalysisSidecar = {
-  engine: ModerationEngine;
+  engine: string;
   flagged: FlaggedSegment[];
   summary: string;
   createdAt: string;
   videoFileName: string;
+  analysisCount: number;
+  providers: string[];
+};
+
+export type AnalysisRun = {
+  id?: string;
+  provider: string;
+  model?: string;
+  reasoning?: string;
+  createdAt?: string;
+  summary: string;
+  flagged: FlaggedSegment[];
+};
+
+export type AnalysisBundle = {
+  schemaVersion: 2;
+  sourceFile: string;
+  analyses: AnalysisRun[];
 };
 
 export type TaskJobArtifacts = {

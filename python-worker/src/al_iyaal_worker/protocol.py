@@ -43,6 +43,11 @@ def parse_worker_command(raw_line: str) -> WorkerCommand:
             task_id=str(payload["taskId"]),
             input_paths=[str(path) for path in payload["inputPaths"]],
             settings=settings,
+            agent_executable_path=(
+                str(payload["agentExecutablePath"])
+                if payload.get("agentExecutablePath")
+                else None
+            ),
         )
 
     if command_type == "start_cut_job":

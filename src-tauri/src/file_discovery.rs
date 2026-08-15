@@ -1,33 +1,56 @@
 use std::{
+    collections::HashSet,
     fs,
     path::{Path, PathBuf},
 };
 
 use crate::types::{SrtListItem, VideoListItem};
 
-pub fn collect_media_files(input_dir: &Path, allowed_extensions: &[String]) -> Result<Vec<PathBuf>, String> {
-    if !input_dir.is_dir() {
-        return Err(format!("Input path is not a directory: {}", input_dir.display()));
-    }
-
-    let normalized_extensions: Vec<String> = allowed_extensions
+fn normalize_extensions(allowed_extensions: &[String]) -> HashSet<String> {
+    allowed_extensions
         .iter()
         .map(|value| value.trim().to_ascii_lowercase())
-        .map(|value| if value.starts_with('.') { value } else { format!(".{value}") })
-        .collect();
+        .map(|value| {
+            if value.starts_with('.') {
+                value
+            } else {
+                format!(".{value}")
+            }
+        })
+        .collect()
+}
+
+fn has_allowed_extension(path: &Path, normalized_extensions: &HashSet<String>) -> bool {
+    path.extension()
+        .and_then(|value| value.to_str())
+        .map(|extension| format!(".{extension}").to_ascii_lowercase())
+        .is_some_and(|extension| normalized_extensions.contains(&extension))
+}
+
+pub fn collect_media_files(
+    input_dir: &Path,
+    allowed_extensions: &[String],
+) -> Result<Vec<PathBuf>, String> {
+    if !input_dir.is_dir() {
+        return Err(format!(
+            "Input path is not a directory: {}",
+            input_dir.display()
+        ));
+    }
+
+    let normalized_extensions = normalize_extensions(allowed_extensions);
 
     let mut files = fs::read_dir(input_dir)
         .map_err(|error| format!("Failed to read input directory: {error}"))?
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path())
-        .filter(|path| path.is_file())
-        .filter(|path| {
-            path.extension()
-                .and_then(|value| value.to_str())
-                .map(|extension| format!(".{extension}").to_ascii_lowercase())
-                .map(|extension| normalized_extensions.contains(&extension))
-                .unwrap_or(false)
+        .map(|entry| {
+            entry
+                .map(|value| value.path())
+                .map_err(|error| format!("Failed reading an input directory entry: {error}"))
         })
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter(|path| path.is_file())
+        .filter(|path| has_allowed_extension(path, &normalized_extensions))
         .collect::<Vec<_>>();
 
     files.sort();
@@ -38,11 +61,7 @@ pub fn collect_media_files_from_inputs(
     input_paths: &[String],
     allowed_extensions: &[String],
 ) -> Result<Vec<PathBuf>, String> {
-    let normalized_extensions: Vec<String> = allowed_extensions
-        .iter()
-        .map(|value| value.trim().to_ascii_lowercase())
-        .map(|value| if value.starts_with('.') { value } else { format!(".{value}") })
-        .collect();
+    let normalized_extensions = normalize_extensions(allowed_extensions);
 
     let mut files = Vec::new();
 
@@ -57,13 +76,11 @@ pub fn collect_media_files_from_inputs(
             return Err(format!("Input path does not exist: {}", path.display()));
         }
 
-        let extension = path
-            .extension()
-            .and_then(|value| value.to_str())
-            .map(|value| format!(".{value}").to_ascii_lowercase())
-            .unwrap_or_default();
-        if !normalized_extensions.contains(&extension) {
-            return Err(format!("Unsupported file extension for path: {}", path.display()));
+        if !has_allowed_extension(&path, &normalized_extensions) {
+            return Err(format!(
+                "Unsupported file extension for path: {}",
+                path.display()
+            ));
         }
 
         files.push(path);
@@ -78,7 +95,10 @@ pub fn build_output_dir(input_dir: &Path) -> PathBuf {
     input_dir.join("audio_replaced")
 }
 
-pub fn discover_video_items(input_dir: &Path, allowed_extensions: &[String]) -> Result<Vec<VideoListItem>, String> {
+pub fn discover_video_items(
+    input_dir: &Path,
+    allowed_extensions: &[String],
+) -> Result<Vec<VideoListItem>, String> {
     let files = collect_media_files(input_dir, allowed_extensions)?;
 
     let mut videos = files
@@ -86,6 +106,8 @@ pub fn discover_video_items(input_dir: &Path, allowed_extensions: &[String]) -> 
         .map(|path| {
             let srt_path = path.with_extension("srt");
             let analysis_path = path.with_extension("analysis.json");
+            let has_srt = srt_path.exists();
+            let has_analysis = analysis_path.exists();
             let file_name = path
                 .file_name()
                 .and_then(|value| value.to_str())
@@ -95,14 +117,10 @@ pub fn discover_video_items(input_dir: &Path, allowed_extensions: &[String]) -> 
             VideoListItem {
                 file_name,
                 path: path.to_string_lossy().to_string(),
-                srt_path: srt_path
-                    .exists()
-                    .then(|| srt_path.to_string_lossy().to_string()),
-                analysis_path: analysis_path
-                    .exists()
-                    .then(|| analysis_path.to_string_lossy().to_string()),
-                has_srt: srt_path.exists(),
-                has_analysis: analysis_path.exists(),
+                srt_path: has_srt.then(|| srt_path.to_string_lossy().to_string()),
+                analysis_path: has_analysis.then(|| analysis_path.to_string_lossy().to_string()),
+                has_srt,
+                has_analysis,
             }
         })
         .collect::<Vec<_>>();
@@ -119,6 +137,7 @@ pub fn discover_srt_items(input_dir: &Path) -> Result<Vec<SrtListItem>, String> 
         .into_iter()
         .map(|path| {
             let analysis_path = path.with_extension("analysis.json");
+            let has_analysis = analysis_path.exists();
             let file_name = path
                 .file_name()
                 .and_then(|value| value.to_str())
@@ -128,10 +147,8 @@ pub fn discover_srt_items(input_dir: &Path) -> Result<Vec<SrtListItem>, String> 
             SrtListItem {
                 file_name,
                 path: path.to_string_lossy().to_string(),
-                analysis_path: analysis_path
-                    .exists()
-                    .then(|| analysis_path.to_string_lossy().to_string()),
-                has_analysis: analysis_path.exists(),
+                analysis_path: has_analysis.then(|| analysis_path.to_string_lossy().to_string()),
+                has_analysis,
             }
         })
         .collect::<Vec<_>>();
@@ -154,7 +171,8 @@ mod tests {
 
     #[test]
     fn should_collect_media_files_from_mixed_file_and_folder_inputs() {
-        let base_dir = std::env::temp_dir().join(format!("al-iyaal-file-discovery-{}", uuid::Uuid::new_v4()));
+        let base_dir =
+            std::env::temp_dir().join(format!("al-iyaal-file-discovery-{}", uuid::Uuid::new_v4()));
         let folder = base_dir.join("folder");
         fs::create_dir_all(&folder).unwrap();
         let direct_file = base_dir.join("clip-a.mp4");

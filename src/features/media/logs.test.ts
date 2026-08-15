@@ -3,6 +3,7 @@ import { describe, expect, it } from "bun:test";
 import {
   appendBoundedLogLine,
   DEFAULT_VISIBLE_LOG_LINES,
+  MAX_STORED_LOG_CHARACTERS,
   MAX_STORED_LOG_LINES,
   toVisibleLogLines,
 } from "@/features/media/logs";
@@ -34,5 +35,12 @@ describe("toVisibleLogLines", () => {
     expect(result).toHaveLength(MAX_STORED_LOG_LINES);
     expect(result.at(0)).toBe("line-4");
     expect(result.at(-1)).toBe(`line-${MAX_STORED_LOG_LINES + 3}`);
+  });
+
+  it("should cap the size of each stored diagnostic line", () => {
+    const [line] = appendBoundedLogLine([], "x".repeat(MAX_STORED_LOG_CHARACTERS + 1));
+
+    expect(line?.startsWith("x".repeat(MAX_STORED_LOG_CHARACTERS))).toBe(true);
+    expect(line?.endsWith("[truncated]")).toBe(true);
   });
 });

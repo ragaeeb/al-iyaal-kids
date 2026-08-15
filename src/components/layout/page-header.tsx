@@ -12,7 +12,7 @@ const PageHeader = ({ title, description }: PageHeaderProps) => {
     <header className="border-[var(--border-soft)] border-b px-3 py-2">
       <div className="flex flex-col items-start justify-between gap-2 lg:flex-row lg:items-center lg:gap-3">
         <div>
-          <h1 className="mt-0.5 text-lg text-[var(--brand-dark)] tracking-tight">{title}</h1>
+          <h1 className="mt-0.5 text-[var(--brand-dark)] text-lg tracking-tight">{title}</h1>
           <p className="mt-0.5 max-w-3xl text-[var(--text-secondary)] text-xs leading-4">
             {description}
           </p>

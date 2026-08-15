@@ -1,9 +1,11 @@
 import { describe, expect, it } from "bun:test";
 
 import {
+  buildLatestTaskJobByInput,
   buildLatestTaskOutputPathByInput,
   buildModerationResults,
   getLatestTask,
+  getLatestTaskForInput,
   getLatestTaskLogLine,
   getTaskOutputPath,
 } from "@/features/media/selectors";
@@ -27,6 +29,46 @@ describe("media selectors", () => {
 
     expect(getLatestTask(tasksById, "transcription")?.taskId).toBe("three");
     expect(getLatestTask(tasksById, "cut")).toBeUndefined();
+  });
+
+  it("should return the latest task for a given input path", () => {
+    const tasksById: Record<string, TaskState> = {
+      newer: {
+        jobs: [
+          {
+            fileName: "other.mp4",
+            inputPath: "/tmp/other.mp4",
+            jobId: "newer-job",
+            logs: [],
+            progressPct: 0,
+            status: "queued",
+          },
+        ],
+        status: "queued",
+        taskId: "newer",
+        taskKind: "transcription",
+      },
+      older: {
+        jobs: [
+          {
+            fileName: "episode.mp4",
+            inputPath: "/tmp/episode.mp4",
+            jobId: "older-job",
+            logs: [],
+            progressPct: 100,
+            status: "completed",
+          },
+        ],
+        status: "completed",
+        taskId: "older",
+        taskKind: "transcription",
+      },
+    };
+
+    expect(getLatestTaskForInput(tasksById, "transcription", "/tmp/episode.mp4")?.taskId).toBe(
+      "older",
+    );
+    expect(getLatestTaskForInput(tasksById, "transcription", "/tmp/missing.mp4")).toBeUndefined();
   });
 
   it("should return the latest non-empty task log line", () => {
@@ -146,6 +188,64 @@ describe("media selectors", () => {
     });
   });
 
+  it("should map latest jobs by input path for queued and running task statuses", () => {
+    const tasksById: Record<string, TaskState> = {
+      "flag-1": {
+        jobs: [
+          {
+            fileName: "episode.srt",
+            inputPath: "/tmp/episode.srt",
+            jobId: "f1",
+            logs: [],
+            progressPct: 0,
+            status: "queued",
+          },
+        ],
+        status: "queued",
+        taskId: "flag-1",
+        taskKind: "flag",
+      },
+      "trans-1": {
+        jobs: [
+          {
+            fileName: "one.mp4",
+            inputPath: "/tmp/one.mp4",
+            jobId: "t1",
+            logs: [],
+            outputPath: "/tmp/one.srt",
+            progressPct: 100,
+            status: "completed",
+          },
+        ],
+        status: "completed",
+        taskId: "trans-1",
+        taskKind: "transcription",
+      },
+      "trans-2": {
+        jobs: [
+          {
+            fileName: "one.mp4",
+            inputPath: "/tmp/one.mp4",
+            jobId: "t2",
+            logs: [],
+            progressPct: 40,
+            status: "running",
+          },
+        ],
+        status: "running",
+        taskId: "trans-2",
+        taskKind: "transcription",
+      },
+    };
+
+    const transcriptionJobs = buildLatestTaskJobByInput(tasksById, "transcription");
+    const flagJobs = buildLatestTaskJobByInput(tasksById, "flag");
+
+    expect(transcriptionJobs["/tmp/one.mp4"]?.jobId).toBe("t2");
+    expect(transcriptionJobs["/tmp/one.mp4"]?.status).toBe("running");
+    expect(flagJobs["/tmp/episode.srt"]?.status).toBe("queued");
+  });
+
   it("should merge task and manual moderation results without duplicates", () => {
     const task: TaskState = {
       jobs: [
@@ -164,9 +264,11 @@ describe("media selectors", () => {
       taskKind: "flag",
     };
     const sidecar: AnalysisSidecar = {
+      analysisCount: 1,
       createdAt: "2026-03-09T00:00:00.000Z",
       engine: "blacklist",
       flagged: [],
+      providers: ["blacklist"],
       summary: "ok",
       videoFileName: "episode.srt",
     };

@@ -1,3 +1,5 @@
+import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { BATCH_EVENT_NAME } from "@/features/batch/constants";
 import type {
   BatchEvent,
@@ -7,7 +9,6 @@ import type {
   CancelBatchRequest,
   StartBatchRequest,
 } from "@/features/batch/types";
-import { invoke, listen, type UnlistenFn } from "@/lib/tauri";
 
 type InvokeFn = typeof invoke;
 type ListenFn = typeof listen;

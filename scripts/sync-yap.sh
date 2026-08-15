@@ -4,10 +4,16 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET_DIR="$ROOT_DIR/assets/bin"
 TARGET_PATH="$TARGET_DIR/yap.sh"
+TEMP_PATH="$(mktemp)"
+
+cleanup() {
+  rm -f "$TEMP_PATH"
+}
+trap cleanup EXIT
 
 mkdir -p "$TARGET_DIR"
 
-cat > "$TARGET_PATH" <<'WRAPPER'
+cat > "$TEMP_PATH" <<'WRAPPER'
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -19,7 +25,12 @@ echo "yap CLI is required but not installed. Install with: brew install finnvoor
 exit 127
 WRAPPER
 
-chmod +x "$TARGET_PATH"
+if ! cmp -s "$TEMP_PATH" "$TARGET_PATH"; then
+  install -m 755 "$TEMP_PATH" "$TARGET_PATH"
+  echo "Synced yap wrapper sidecar to $TARGET_PATH"
+else
+  echo "Yap wrapper sidecar already current."
+fi
+
 # Remove legacy wrapper name that causes tauri resource-copy issues.
 rm -f "$TARGET_DIR/yap"
-echo "Synced yap wrapper sidecar to $TARGET_PATH"

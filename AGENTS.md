@@ -8,13 +8,11 @@ Guidance for AI/code agents working in this repository.
 
 - Dashboard
 - Remove Music
-- Transcribe
-- Profanity Detection
-- Cut Video
-- Analytics
+- Edit Video
 - Settings
 
 The app is local-first and privacy-first. Do not introduce telemetry by default.
+Do not describe the app as fully offline: subtitle moderation can use opt-in cloud providers or installed local CLI agents when the user selects them.
 
 ## Core standards
 
@@ -39,29 +37,21 @@ The app is local-first and privacy-first. Do not introduce telemetry by default.
 
 - Remove Music
   - folder-based `.mp4` / `.mov` processing
-  - Demucs vocals extraction + ffmpeg remux
+  - Demucs MLX vocals extraction + ffmpeg remux
   - outputs to `audio_replaced/`
-- Transcribe
-  - one or more videos or a folder
-  - local STT via `yap`
-  - writes sibling `.srt` sidecars
-- Profanity Detection
-  - one or more `.srt` files or a folder
-  - per-run engine selection in the detection page itself
-  - per-run reasoning depth in the detection page itself
-  - can load existing sibling `.analysis.json` results
-  - writes sibling `.analysis.json` sidecars
-  - API keys live in `Settings`, not in `Analytics`
-- Cut Video
-  - simple player + exact range export
-  - can display subtitle-at-cursor from sibling `.srt`
-  - can jump to flagged timestamps from sibling `.analysis.json`
-- Analytics
-  - local-only persisted counters
-  - includes detection-specific totals like flagged lines and files with flags
+- Edit Video
+  - current shell entry point for subtitle generation, subtitle review, content flagging, and cut export
+  - works on one selected `.mp4` / `.mov` at a time
+  - `Subtitles` drawer can generate sibling `.srt` sidecars via local STT with `yap`
+  - `Flagged Sections` drawer can load existing sibling `.analysis.json` results or generate them from subtitle sidecars
+  - the JSON import area accepts external analysis results and provides a `Copy Prompt` action without rendering the full prompt
+  - subtitle analysis supports Settings-selected cloud engines or installed local CLI agents, with per-run engine and cloud-strategy overrides
+  - cut export is range-based and writes to `video_cleaned/`
+  - delete action trashes the selected video plus matching `.srt`, `.analysis.json`, and `.ranges.json` sidecars when present
+  - API keys live in `Settings`
 - Cancel semantics
   - `stop_after_current`
-  - do not misrepresent this as mid-request abort for an in-flight single-file LLM call
+  - do not misrepresent this as a mid-request abort for an in-flight single-file LLM call
 
 ## Testing conventions
 
@@ -72,7 +62,6 @@ The app is local-first and privacy-first. Do not introduce telemetry by default.
   - reducers/state transitions
   - request/response payload builders
   - protocol mapping/parsing
-  - analytics derivation helpers
   - moderation result parsing
   - error handling and edge cases
   - playback compatibility helpers (for example ffprobe fixture-shell tests)
@@ -80,17 +69,15 @@ The app is local-first and privacy-first. Do not introduce telemetry by default.
 ## Rust conventions
 
 - Keep command handlers thin; place validation and logic into testable helpers.
-- Add unit tests for protocol parsing, queue state transitions, analytics aggregation, and command validation behavior.
+- Add unit tests for protocol parsing, queue state transitions, and command validation behavior.
+- Async coordinators that join subprocesses or buffered readers must include a future-size or small-stack regression test; parser-only fixtures do not cover Tokio worker stack usage.
 - Avoid introducing platform-coupled behavior without guard rails/tests.
-- Analytics persistence is local-only and should consume existing batch/task completion events instead of changing worker protocol shapes unless necessary.
-- If analytics needs task-specific data, prefer persisting it from worker-completion state rather than recomputing it in the frontend.
-
 ## Python worker conventions
 
 - Keep command construction and filesystem behavior deterministic.
 - Prefer pure helper functions for command/path logic.
 - Keep worker output JSONL schema stable.
-- Add pytest coverage for Demucs/ffmpeg command construction, error mapping, and LLM request-config helpers.
+- Add pytest coverage for MLX separator/ffmpeg command construction, error mapping, and LLM request-config helpers.
 - Flagging supports both:
   - video inputs (uses `<video>.srt` sidecar)
   - direct `.srt` inputs (writes sibling `.analysis.json`)
@@ -124,31 +111,29 @@ When debugging failures or stalls:
 - verify UI worker status messages and drawer log panels
 - confirm runtime paths:
   - Python venv under app data runtime dir
-  - ffmpeg/demucs/yap resolution via env overrides when needed
+  - ffmpeg/MLX model/yap resolution via env overrides when needed
 - for playback issues, check:
   - `ffprobe` output
-  - asset protocol path handling (`convertFileSrc` flow)
+  - the bounded localhost preview server in `src-tauri/src/media_preview.rs`
   - `src/features/editor/playback-compat.test.ts`
-- for analytics issues, check:
-  - app data analytics history file creation
-  - Rust completion-event recording path
-  - persisted detection totals for flagged items/files
-  - `src/features/analytics/utils.test.ts`
-
+- for analysis-provider issues, check:
+  - executable discovery and model listing in `src-tauri/src/analysis_agents.rs`
+  - local CLI command construction and temporary subtitle workspaces in `python-worker/src/al_iyaal_worker/moderation/agents.py`
+  - provider request construction in `python-worker/src/al_iyaal_worker/moderation/llm.py`
 ## Repository map
 
 - `src/` React app, feature domain logic, tests.
-- `src/features/app/`: sidebar navigation/page definitions.
-- `src/features/analytics/`: analytics snapshot types, transport, dashboard derivation utilities.
+- `src/features/app/`: sidebar navigation/page definitions for `Dashboard`, `Remove Music`, `Edit Video`, and `Settings`.
 - `src/features/batch/`: remove-music state/transport/tests.
 - `src/features/media/`: transcription/flag/cut task contracts + reducer + transport.
 - `src/features/editor/`: subtitle parsing, range building, playback compatibility, fixtures.
 - `src/features/moderation/`: moderation settings validation and result utilities.
-- `src/components/layout/`: `app-shell`, `sidebar-nav`, `page-header`, analytics card components.
-- `src/components/`: workflow pages and shared UI.
-- `src-tauri/`: Rust backend, analytics persistence, Tauri commands, runtime bootstrap, worker orchestration.
-- `python-worker/`: Python daemon and media-processing pipeline.
+- `src/components/layout/`: `app-shell`, `sidebar-nav`, and `page-header`.
+- `src/components/`: workflow panels and shared UI. `simple-cut-editor-panel.tsx` is the mounted editor surface in `App.tsx`; the unreferenced standalone transcription, profanity, and moderation-settings panels are hard-cut and are not supported entry points.
+- `src-tauri/`: Rust backend, Tauri commands, runtime bootstrap, worker orchestration, and local analysis-agent discovery.
+- `python-worker/`: Python daemon, media-processing pipeline, moderation helpers, and local CLI agent invocation.
 - `scripts/`: bootstrap/check/release/version sync helpers.
+- `docs/analysis-providers.md`: analysis engines, local CLI agents, model/reasoning selection, privacy, and troubleshooting.
 - `docs/macos-signing-notarization.md`: local signing/notarization workflow and Apple/Tauri references.
 - `.github/workflows/`: CI and semantic-release pipelines.
 

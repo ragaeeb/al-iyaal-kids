@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import path from "node:path";
 
 const rootDir = path.resolve(import.meta.dir, "..");
@@ -8,21 +8,32 @@ const iconsDir = path.join(rootDir, "src-tauri", "icons");
 const requiredIconFiles = ["32x32.png", "128x128.png", "128x128@2x.png", "icon.icns"] as const;
 const keepEntries = new Set([...requiredIconFiles, ".gitkeep"]);
 
-const run = () => {
+const shouldGenerateIcons = () => {
   if (!existsSync(logoPath)) {
     throw new Error(`Missing logo source at ${logoPath}`);
   }
 
+  const logoModifiedAt = statSync(logoPath).mtimeMs;
+  return requiredIconFiles.some((iconFile) => {
+    const iconPath = path.join(iconsDir, iconFile);
+    return !existsSync(iconPath) || statSync(iconPath).mtimeMs < logoModifiedAt;
+  });
+};
+
+const run = () => {
   mkdirSync(iconsDir, { recursive: true });
 
-  const command = Bun.spawnSync(["bunx", "tauri", "icon", logoPath, "--output", iconsDir], {
-    cwd: rootDir,
-    stderr: "inherit",
-    stdout: "inherit",
-  });
+  const generatedIcons = shouldGenerateIcons();
+  if (generatedIcons) {
+    const command = Bun.spawnSync(["bunx", "tauri", "icon", logoPath, "--output", iconsDir], {
+      cwd: rootDir,
+      stderr: "inherit",
+      stdout: "inherit",
+    });
 
-  if (command.exitCode !== 0) {
-    throw new Error(`tauri icon generation failed with exit code ${command.exitCode}`);
+    if (command.exitCode !== 0) {
+      throw new Error(`tauri icon generation failed with exit code ${command.exitCode}`);
+    }
   }
 
   for (const entry of readdirSync(iconsDir)) {
@@ -39,7 +50,11 @@ const run = () => {
     }
   }
 
-  console.log("Icon sync complete (macOS bundle icons only).");
+  console.log(
+    generatedIcons
+      ? "Icon sync complete (macOS bundle icons only)."
+      : "Icon assets already current.",
+  );
 };
 
 run();

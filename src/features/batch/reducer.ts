@@ -5,7 +5,7 @@ import type {
   BatchUiState,
   JobRecord,
 } from "@/features/batch/types";
-import { clampProgress } from "@/features/batch/utils";
+import { clampProgress, dedupePaths } from "@/features/batch/utils";
 import { appendBoundedLogLine } from "@/features/media/logs";
 
 export const createInitialBatchUiState = (): BatchUiState => ({
@@ -93,6 +93,13 @@ export const batchReducer = (state: BatchUiState, action: BatchUiAction): BatchU
     };
   }
 
+  if (action.type === "add_selected_input_paths") {
+    return {
+      ...state,
+      selectedInputPaths: dedupePaths([...state.selectedInputPaths, ...action.payload]),
+    };
+  }
+
   if (action.type === "set_worker_status") {
     return {
       ...state,
@@ -114,10 +121,18 @@ export const batchReducer = (state: BatchUiState, action: BatchUiAction): BatchU
       ...state,
       activeBatchId: action.payload.batchId,
       batchesById: {
-        ...state.batchesById,
         [action.payload.batchId]: action.payload,
       },
       isStartingBatch: false,
+    };
+  }
+
+  if (action.type === "cancel_batch_accepted") {
+    return {
+      ...state,
+      errorMessage: null,
+      workerMessage:
+        "Cancellation requested. The worker will stop after the current file finishes.",
     };
   }
 

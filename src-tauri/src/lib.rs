@@ -1,11 +1,13 @@
-mod analytics;
+mod analysis_agents;
 mod commands;
 mod file_discovery;
 mod ids;
+mod media_preview;
 mod protocol;
 mod runtime;
 mod state;
 mod types;
+
 mod worker;
 
 use tauri::menu::{AboutMetadataBuilder, Menu, MenuItem, SubmenuBuilder};
@@ -63,7 +65,10 @@ pub fn run() {
                 )?)
                 .build()?;
 
-            Menu::with_items(app, &[&app_menu, &file_menu, &edit_menu, &window_menu, &help_menu])
+            Menu::with_items(
+                app,
+                &[&app_menu, &file_menu, &edit_menu, &window_menu, &help_menu],
+            )
         })
         .on_menu_event(|app, event| {
             if event.id() == GITHUB_MENU_ID {
@@ -84,12 +89,18 @@ pub fn run() {
             commands::get_task_state,
             commands::list_videos,
             commands::list_srt_files,
-            commands::get_analytics_snapshot,
             commands::get_moderation_settings,
+            commands::list_analysis_agents,
             commands::save_moderation_settings,
+            commands::save_cut_ranges,
+            commands::save_analysis_sidecar,
             commands::read_text_file,
+            commands::read_analysis_import_file,
+            commands::get_analysis_prompt_preview,
+            commands::get_media_preview_url,
             commands::trash_file,
             commands::open_folder_picker,
+            commands::get_log_history,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

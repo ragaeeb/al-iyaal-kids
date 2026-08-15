@@ -30,7 +30,7 @@ const updateCargoVersion = (cargoToml: string, version: string) => {
 
   const absoluteVersionLineIndex = packageStart + versionLineIndex;
   lines[absoluteVersionLineIndex] = `version = "${version}"`;
-  return `${lines.join("\n")}\n`;
+  return lines.join("\n");
 };
 
 const updateJsonVersionLine = (content: string, version: string, label: string) => {
@@ -41,7 +41,7 @@ const updateJsonVersionLine = (content: string, version: string, label: string) 
   }
   const hasComma = lines[versionIndex]?.trim().endsWith(",");
   lines[versionIndex] = `  "version": "${version}"${hasComma ? "," : ""}`;
-  return `${lines.join("\n")}\n`;
+  return lines.join("\n");
 };
 
 const syncVersion = async () => {
@@ -59,13 +59,20 @@ const syncVersion = async () => {
     nextVersion,
     "src-tauri/tauri.conf.json",
   );
-  await writeFile(tauriConfigPath, updatedTauriConfig, "utf8");
+  const tauriConfigChanged = updatedTauriConfig !== tauriConfigContent;
+  if (tauriConfigChanged) {
+    await writeFile(tauriConfigPath, updatedTauriConfig, "utf8");
+  }
 
   const cargoTomlContent = await readFile(cargoTomlPath, "utf8");
   const updatedCargoToml = updateCargoVersion(cargoTomlContent, nextVersion);
-  await writeFile(cargoTomlPath, updatedCargoToml, "utf8");
+  const cargoTomlChanged = updatedCargoToml !== cargoTomlContent;
+  if (cargoTomlChanged) {
+    await writeFile(cargoTomlPath, updatedCargoToml, "utf8");
+  }
 
-  console.log(`Synced Tauri/Cargo versions to ${nextVersion}`);
+  const status = tauriConfigChanged || cargoTomlChanged ? "Synced" : "Already synced";
+  console.log(`${status} Tauri/Cargo versions to ${nextVersion}`);
 };
 
 await syncVersion();

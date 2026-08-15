@@ -15,7 +15,9 @@ const LogOutput = ({ className, logs, maxLines }: LogOutputProps) => {
 
   return (
     <div
-      className={className ?? "mt-1.5 max-h-32 overflow-auto rounded-[12px] bg-[#fdf1e8] px-2 py-1.5"}
+      className={
+        className ?? "mt-1.5 max-h-32 overflow-auto rounded-[12px] bg-[#fdf1e8] px-2 py-1.5"
+      }
     >
       {visibleLogs.map((line) => (
         <p key={line.id} className="font-mono text-[#7f524a] text-[9px]">

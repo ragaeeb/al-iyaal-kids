@@ -3,11 +3,13 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from ..filesystem import to_job_id
 from ..models import StartFlagBatchCommand
 from ..moderation import analyze_subtitles, analyze_with_llm, describe_llm_request
 from ..subtitles import parse_srt, sidecar_analysis_path, sidecar_srt_path
+from ..staged_output import commit_staged_output, staged_output_path
 from .events import (
     emit_job_log,
     emit_task_done,
@@ -20,16 +22,50 @@ EmitEvent = Callable[[dict[str, object]], None]
 ShouldCancel = Callable[[], bool]
 
 
-def _build_analysis_payload(
-    source_path: Path, engine: str, flagged: list[dict[str, Any]], summary: str
+def _build_analysis_run(
+    source_path: Path,
+    engine: str,
+    flagged: list[dict[str, Any]],
+    summary: str,
+    settings: dict[str, Any],
 ) -> dict[str, Any]:
+    is_agent = engine in {"codex", "antigravity", "kiro_cli", "opencode"}
     return {
+        "id": str(uuid4()),
+        "provider": engine,
         "engine": engine,
         "flagged": flagged,
         "summary": summary,
         "createdAt": datetime.now(tz=timezone.utc).isoformat(),
         "videoFileName": source_path.name,
+        **(
+            {"model": str(settings["agentModel"])}
+            if is_agent and settings.get("agentModel")
+            else {}
+        ),
+        **(
+            {"reasoning": str(settings["agentReasoningLevel"])}
+            if is_agent and settings.get("agentReasoningLevel")
+            else {}
+        ),
     }
+
+
+def _load_existing_analysis_runs(analysis_path: Path) -> list[dict[str, Any]]:
+    if not analysis_path.exists():
+        return []
+    parsed = json.loads(analysis_path.read_text(encoding="utf-8"))
+    if isinstance(parsed, list):
+        runs = parsed
+    elif isinstance(parsed, dict) and parsed.get("schemaVersion") == 2:
+        runs = parsed.get("analyses")
+    elif isinstance(parsed, dict):
+        runs = [parsed]
+    else:
+        raise ValueError("Existing analysis sidecar must contain an object or array.")
+    if not isinstance(runs, list) or any(not isinstance(run, dict) for run in runs):
+        raise ValueError("Existing analysis sidecar contains invalid analysis entries.")
+    return runs
 
 
 def _resolve_sidecars(path: Path) -> tuple[Path, Path]:
@@ -112,7 +148,13 @@ def process_flag_batch(
                     job_id,
                     f"LLM request config: endpoint={request_config.endpoint} model={request_config.model}",
                 )
-                llm_result = analyze_with_llm(subtitles, command.settings, source_path.name)
+                llm_result = analyze_with_llm(
+                    subtitles,
+                    command.settings,
+                    source_path.name,
+                    command.agent_executable_path,
+                    agent_subtitle_path=srt_path,
+                )
                 flagged = llm_result.flagged
                 summary = llm_result.summary
                 analysis_engine = llm_result.engine
@@ -136,12 +178,24 @@ def process_flag_batch(
             f"Flagged {len(flagged)} subtitle item(s).",
         )
 
-        payload = _build_analysis_payload(source_path, analysis_engine, flagged, summary)
+        run = _build_analysis_run(
+            source_path, analysis_engine, flagged, summary, command.settings
+        )
         try:
-            analysis_path.write_text(
-                json.dumps(payload, separators=(",", ":"), ensure_ascii=False),
-                encoding="utf-8",
+            payload = {
+                "schemaVersion": 2,
+                "sourceFile": source_path.name,
+                "analyses": [*_load_existing_analysis_runs(analysis_path), run],
+            }
+            serialized_payload = json.dumps(
+                payload,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
             )
+            with staged_output_path(analysis_path) as staged_analysis_path:
+                staged_analysis_path.write_text(serialized_payload, encoding="utf-8")
+                commit_staged_output(staged_analysis_path, analysis_path)
         except Exception as error:
             failed_count += 1
             emit_task_job_error(

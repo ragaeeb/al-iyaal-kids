@@ -1,3 +1,11 @@
+# [1.3.0](https://github.com/ragaeeb/al-iyaal-kids/compare/v1.2.0...v1.3.0) (2026-08-15)
+
+
+### Features
+
+* **compression:** Add max compression ([50942f5](https://github.com/ragaeeb/al-iyaal-kids/commit/50942f5f16593f2de8876fe42e95b4a58678d114))
+* **mlx:** Demucs MLX Integration, Local CLI Analysis Agents, Analysis Import, Quick Actions ([#23](https://github.com/ragaeeb/al-iyaal-kids/issues/23)) ([ffd00b7](https://github.com/ragaeeb/al-iyaal-kids/commit/ffd00b7519874a728eb1ac537f682d14242bb242))
+
 # [1.2.0](https://github.com/ragaeeb/al-iyaal-kids/compare/v1.1.0...v1.2.0) (2026-03-09)
 
 

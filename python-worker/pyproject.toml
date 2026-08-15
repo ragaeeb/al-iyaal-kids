@@ -7,7 +7,7 @@ requires-python = ">=3.13"
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=8.4.0"]
+dev = ["numpy>=2.0.0", "pytest>=8.4.0", "soundfile>=0.13.1"]
 demucs-bootstrap = ["demucs-mlx[convert]==1.4.4"]
 runtime = [
     "better-profanity==0.7.0",

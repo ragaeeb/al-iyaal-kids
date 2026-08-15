@@ -26,7 +26,9 @@ demucs-bootstrap = [
     { name = "demucs-mlx", extra = ["convert"] },
 ]
 dev = [
+    { name = "numpy" },
     { name = "pytest" },
+    { name = "soundfile" },
 ]
 runtime = [
     { name = "better-profanity" },
@@ -40,7 +42,9 @@ requires-dist = [
     { name = "better-profanity", marker = "extra == 'runtime'", specifier = "==0.7.0" },
     { name = "demucs-mlx", marker = "extra == 'runtime'", specifier = "==1.4.4" },
     { name = "demucs-mlx", extras = ["convert"], marker = "extra == 'demucs-bootstrap'", specifier = "==1.4.4" },
+    { name = "numpy", marker = "extra == 'dev'", specifier = ">=2.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.4.0" },
+    { name = "soundfile", marker = "extra == 'dev'", specifier = ">=0.13.1" },
     { name = "soundfile", marker = "extra == 'runtime'", specifier = "==0.13.1" },
     { name = "torch", marker = "extra == 'runtime'", specifier = "==2.13.0" },
 ]

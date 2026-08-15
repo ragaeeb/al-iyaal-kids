@@ -1,8 +1,9 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     net::TcpListener as StdTcpListener,
     path::PathBuf,
     sync::{Arc, Mutex, OnceLock},
+    time::Duration,
 };
 
 use tokio::{
@@ -13,12 +14,49 @@ use tokio::{
 use uuid::Uuid;
 
 const MAX_HEADER_BYTES: usize = 16 * 1024;
+const MAX_PREVIEW_ROUTES: usize = 64;
+const REQUEST_HEADER_TIMEOUT: Duration = Duration::from_secs(5);
 const STREAM_CHUNK_BYTES: usize = 128 * 1024;
+
+#[derive(Default)]
+struct PreviewRoutes {
+    paths_by_token: HashMap<String, PathBuf>,
+    tokens_by_path: HashMap<PathBuf, String>,
+    insertion_order: VecDeque<String>,
+}
+
+impl PreviewRoutes {
+    fn register(&mut self, path: PathBuf) -> String {
+        if let Some(token) = self.tokens_by_path.get(&path) {
+            return token.clone();
+        }
+
+        let token = Uuid::new_v4().to_string();
+        self.paths_by_token.insert(token.clone(), path.clone());
+        self.tokens_by_path.insert(path, token.clone());
+        self.insertion_order.push_back(token.clone());
+
+        while self.insertion_order.len() > MAX_PREVIEW_ROUTES {
+            let Some(expired_token) = self.insertion_order.pop_front() else {
+                break;
+            };
+            if let Some(expired_path) = self.paths_by_token.remove(&expired_token) {
+                self.tokens_by_path.remove(&expired_path);
+            }
+        }
+
+        token
+    }
+
+    fn path_for_token(&self, token: &str) -> Option<PathBuf> {
+        self.paths_by_token.get(token).cloned()
+    }
+}
 
 #[derive(Clone)]
 struct MediaPreviewServer {
     port: u16,
-    routes: Arc<Mutex<HashMap<String, PathBuf>>>,
+    routes: Arc<Mutex<PreviewRoutes>>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -28,15 +66,15 @@ struct ByteRange {
 }
 
 static PREVIEW_SERVER: OnceLock<MediaPreviewServer> = OnceLock::new();
+static PREVIEW_SERVER_INIT: Mutex<()> = Mutex::new(());
 
 pub fn register_media_preview_path(path: PathBuf) -> Result<String, String> {
     let server = ensure_preview_server()?;
-    let token = Uuid::new_v4().to_string();
-    server
+    let token = server
         .routes
         .lock()
         .map_err(|_| "Media preview route state is unavailable.".to_string())?
-        .insert(token.clone(), path);
+        .register(path);
 
     Ok(format!("http://127.0.0.1:{}/media/{token}", server.port))
 }
@@ -46,7 +84,14 @@ fn ensure_preview_server() -> Result<&'static MediaPreviewServer, String> {
         return Ok(server);
     }
 
-    let routes = Arc::new(Mutex::new(HashMap::new()));
+    let _init_guard = PREVIEW_SERVER_INIT
+        .lock()
+        .map_err(|_| "Media preview server initialization is unavailable.".to_string())?;
+    if let Some(server) = PREVIEW_SERVER.get() {
+        return Ok(server);
+    }
+
+    let routes = Arc::new(Mutex::new(PreviewRoutes::default()));
     let std_listener = StdTcpListener::bind("127.0.0.1:0")
         .map_err(|error| format!("Failed starting media preview server: {error}"))?;
     std_listener
@@ -73,13 +118,14 @@ fn ensure_preview_server() -> Result<&'static MediaPreviewServer, String> {
         .ok_or_else(|| "Media preview server did not initialize.".to_string())
 }
 
-async fn accept_preview_requests(
-    listener: TcpListener,
-    routes: Arc<Mutex<HashMap<String, PathBuf>>>,
-) {
+async fn accept_preview_requests(listener: TcpListener, routes: Arc<Mutex<PreviewRoutes>>) {
     loop {
-        let Ok((stream, _)) = listener.accept().await else {
-            continue;
+        let (stream, _) = match listener.accept().await {
+            Ok(connection) => connection,
+            Err(_) => {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                continue;
+            }
         };
         let routes = Arc::clone(&routes);
         tokio::spawn(async move {
@@ -90,9 +136,17 @@ async fn accept_preview_requests(
 
 async fn handle_preview_request(
     mut stream: TcpStream,
-    routes: Arc<Mutex<HashMap<String, PathBuf>>>,
+    routes: Arc<Mutex<PreviewRoutes>>,
 ) -> Result<(), String> {
-    let request = read_request_headers(&mut stream).await?;
+    let request =
+        match tokio::time::timeout(REQUEST_HEADER_TIMEOUT, read_request_headers(&mut stream)).await
+        {
+            Ok(result) => result?,
+            Err(_) => {
+                write_response(&mut stream, "408 Request Timeout", &[], &[]).await?;
+                return Ok(());
+            }
+        };
     let Some((request_line, headers)) = request.split_once("\r\n") else {
         write_response(&mut stream, "400 Bad Request", &[], &[]).await?;
         return Ok(());
@@ -113,8 +167,7 @@ async fn handle_preview_request(
         routes
             .lock()
             .map_err(|_| "Media preview route state is unavailable.".to_string())?
-            .get(token)
-            .cloned()
+            .path_for_token(token)
     };
     let Some(path) = path else {
         write_response(&mut stream, "404 Not Found", &[], &[]).await?;
@@ -140,12 +193,30 @@ async fn handle_preview_request(
     }
 
     let range_header = find_header(headers, "range");
-    let range = range_header
-        .and_then(|value| parse_range_header(value, file_len))
-        .unwrap_or(ByteRange {
+    let range = match range_header {
+        Some(value) => {
+            let Some(range) = parse_range_header(value, file_len) else {
+                let file_len_header = format!("bytes */{file_len}");
+                write_response(
+                    &mut stream,
+                    "416 Range Not Satisfiable",
+                    &[
+                        ("Accept-Ranges", "bytes"),
+                        ("Access-Control-Allow-Origin", "*"),
+                        ("Content-Range", file_len_header.as_str()),
+                    ],
+                    &[],
+                )
+                .await?;
+                return Ok(());
+            };
+            range
+        }
+        None => ByteRange {
             start: 0,
             end: file_len - 1,
-        });
+        },
+    };
     let content_len = range.end - range.start + 1;
     let content_type = content_type_for_path(&path);
     let status = if range_header.is_some() {
@@ -155,15 +226,17 @@ async fn handle_preview_request(
     };
     let content_len_header = content_len.to_string();
     let content_range = format!("bytes {}-{}/{}", range.start, range.end, file_len);
-    let response_headers = [
+    let mut response_headers = vec![
         ("Accept-Ranges", "bytes"),
         ("Access-Control-Allow-Origin", "*"),
         ("Cache-Control", "no-store"),
         ("Connection", "close"),
         ("Content-Length", content_len_header.as_str()),
-        ("Content-Range", content_range.as_str()),
         ("Content-Type", content_type),
     ];
+    if range_header.is_some() {
+        response_headers.push(("Content-Range", content_range.as_str()));
+    }
 
     write_response_headers(&mut stream, status, &response_headers).await?;
     if method == "HEAD" {
@@ -273,6 +346,9 @@ fn parse_range_header(value: &str, file_len: u64) -> Option<ByteRange> {
     let (start, end) = range.split_once('-')?;
     if start.is_empty() {
         let suffix_len = end.parse::<u64>().ok()?.min(file_len);
+        if suffix_len == 0 {
+            return None;
+        }
         return Some(ByteRange {
             start: file_len - suffix_len,
             end: file_len - 1,
@@ -309,7 +385,9 @@ fn content_type_for_path(path: &std::path::Path) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_range_header, ByteRange};
+    use std::path::PathBuf;
+
+    use super::{parse_range_header, ByteRange, PreviewRoutes, MAX_PREVIEW_ROUTES};
 
     #[test]
     fn should_parse_explicit_byte_range() {
@@ -339,5 +417,34 @@ mod tests {
     fn should_reject_invalid_byte_range() {
         assert_eq!(parse_range_header("bytes=20-10", 100), None);
         assert_eq!(parse_range_header("items=0-10", 100), None);
+        assert_eq!(parse_range_header("bytes=-0", 100), None);
+        assert_eq!(parse_range_header("bytes=100-", 100), None);
+    }
+
+    #[test]
+    fn should_reuse_preview_routes_for_the_same_path() {
+        let mut routes = PreviewRoutes::default();
+        let path = PathBuf::from("/tmp/episode.mp4");
+
+        let first_token = routes.register(path.clone());
+        let second_token = routes.register(path);
+
+        assert_eq!(first_token, second_token);
+        assert_eq!(routes.paths_by_token.len(), 1);
+    }
+
+    #[test]
+    fn should_evict_the_oldest_preview_route_at_the_limit() {
+        let mut routes = PreviewRoutes::default();
+        let first_path = PathBuf::from("/tmp/episode-0.mp4");
+        let first_token = routes.register(first_path.clone());
+
+        for index in 1..=MAX_PREVIEW_ROUTES {
+            routes.register(PathBuf::from(format!("/tmp/episode-{index}.mp4")));
+        }
+
+        assert_eq!(routes.paths_by_token.len(), MAX_PREVIEW_ROUTES);
+        assert!(routes.path_for_token(&first_token).is_none());
+        assert!(!routes.tokens_by_path.contains_key(&first_path));
     }
 }

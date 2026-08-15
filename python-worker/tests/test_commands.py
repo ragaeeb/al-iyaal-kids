@@ -21,6 +21,10 @@ def test_should_build_ffmpeg_remux_command() -> None:
     assert command == [
         "/usr/local/bin/ffmpeg",
         "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nostats",
         "-i",
         "/tmp/a.mov",
         "-i",
@@ -121,6 +125,10 @@ def test_should_build_ffmpeg_concat_command() -> None:
     assert command == [
         "/usr/local/bin/ffmpeg",
         "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nostats",
         "-f",
         "concat",
         "-safe",

@@ -297,7 +297,7 @@ fn ensure_runtime_python_packages(
 }
 
 fn runtime_import_check_script() -> &'static str {
-    "import demucs_mlx, mlx, soundfile, torch"
+    "import better_profanity, demucs_mlx, mlx, soundfile, torch"
 }
 
 fn verify_runtime_python_packages(python_executable: &Path) -> Result<(), String> {
@@ -324,7 +324,7 @@ mod tests {
     fn should_check_for_the_active_demucs_mlx_runtime_dependencies() {
         assert_eq!(
             runtime_import_check_script(),
-            "import demucs_mlx, mlx, soundfile, torch"
+            "import better_profanity, demucs_mlx, mlx, soundfile, torch"
         );
     }
 }

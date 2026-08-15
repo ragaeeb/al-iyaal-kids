@@ -1,5 +1,8 @@
+import { truncateText } from "@/features/shared/text";
+
 const DEFAULT_VISIBLE_LOG_LINES = 80;
 const MAX_STORED_LOG_LINES = 200;
+const MAX_STORED_LOG_CHARACTERS = 4_000;
 
 type VisibleLogLine = {
   id: string;
@@ -11,7 +14,7 @@ const appendBoundedLogLine = (
   message: string,
   maxLines = MAX_STORED_LOG_LINES,
 ): string[] => {
-  const nextLogs = [...logs, message];
+  const nextLogs = [...logs, truncateText(message, MAX_STORED_LOG_CHARACTERS)];
   if (nextLogs.length <= maxLines) {
     return nextLogs;
   }
@@ -33,4 +36,10 @@ const toVisibleLogLines = (
 };
 
 export type { VisibleLogLine };
-export { appendBoundedLogLine, DEFAULT_VISIBLE_LOG_LINES, MAX_STORED_LOG_LINES, toVisibleLogLines };
+export {
+  appendBoundedLogLine,
+  DEFAULT_VISIBLE_LOG_LINES,
+  MAX_STORED_LOG_CHARACTERS,
+  MAX_STORED_LOG_LINES,
+  toVisibleLogLines,
+};

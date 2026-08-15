@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { SidebarNav } from "@/components/layout/sidebar-nav";
 import type { AppPage } from "@/features/app/navigation";
 
-import logoPng from "../../../logo.png";
+import logoPng from "../../../src-tauri/icons/128x128.png";
 
 type AppShellProps = {
   activePage: AppPage;

@@ -10,6 +10,10 @@ def build_ffmpeg_command(
     return [
         ffmpeg_path,
         "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nostats",
         "-i",
         str(video_path),
         "-i",
@@ -100,6 +104,10 @@ def build_ffmpeg_concat_command(
     return [
         ffmpeg_path,
         "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nostats",
         "-f",
         "concat",
         "-safe",

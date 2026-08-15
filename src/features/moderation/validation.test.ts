@@ -5,6 +5,8 @@ import { isValidModerationSettings } from "@/features/moderation/validation";
 describe("isValidModerationSettings", () => {
   it("should validate moderation settings schema", () => {
     const valid = {
+      agentModel: "",
+      agentReasoningLevel: "",
       amazonNovaApiKey: "",
       analysisStrategy: "fast",
       contentCriteria: "criteria",
@@ -28,5 +30,6 @@ describe("isValidModerationSettings", () => {
     ).toBe(false);
     expect(isValidModerationSettings({ ...valid, engine: "bad" })).toBe(false);
     expect(isValidModerationSettings({ ...valid, analysisStrategy: "bad" })).toBe(false);
+    expect(isValidModerationSettings({ ...valid, agentModel: null })).toBe(false);
   });
 });

@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+SeparationProgress = Callable[[float], None]
+
 
 @dataclass(slots=True)
 class SeparatedAudio:
@@ -13,9 +15,13 @@ class SeparatedAudio:
 
 
 class VocalSeparator(Protocol):
-    def separate_vocals(self, input_path: Path) -> SeparatedAudio: ...
+    def separate_vocals(
+        self, input_path: Path, on_progress: SeparationProgress
+    ) -> SeparatedAudio: ...
 
     def cleanup(self, separated_audio: SeparatedAudio) -> None: ...
+
+    def release(self) -> None: ...
 
 
 SeparatorFactory = Callable[[Path], VocalSeparator]

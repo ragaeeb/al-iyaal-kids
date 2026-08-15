@@ -9,7 +9,7 @@
 - Write tests first where practical for pure logic and state transitions.
 - Use `bun:test` with `it('should ...')` naming.
 - DOM/component rendering tests are intentionally out of MVP scope.
-- Keep docs aligned to the current shell: `Dashboard`, `Remove Music`, `Edit Video`, `Analytics`, `Settings`. Do not document separate transcription or profanity pages unless they are mounted in `App.tsx`.
+- Keep docs aligned to the current shell: `Dashboard`, `Remove Music`, `Edit Video`, and `Settings`. Do not document separate transcription or profanity pages unless they are mounted in `App.tsx`.
 
 ## Commands
 

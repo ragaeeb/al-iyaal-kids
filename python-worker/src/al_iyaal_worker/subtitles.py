@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 SRT_TIME_RE = re.compile(
-    r"(?P<start>\d{2}:\d{2}:\d{2},\d{3})\s*-->\s*(?P<end>\d{2}:\d{2}:\d{2},\d{3})"
+    r"\s*(?P<start>\d{2}:\d{2}:\d{2},\d{3})\s*-->\s*(?P<end>\d{2}:\d{2}:\d{2},\d{3})\s*"
 )
 
 
@@ -19,40 +19,65 @@ def parse_srt_timestamp(value: str) -> float:
     hh_mm, ms = value.rsplit(",", maxsplit=1)
     hours, minutes, seconds = [int(part) for part in hh_mm.split(":")]
     millis = int(ms)
+    if minutes >= 60 or seconds >= 60 or millis >= 1000:
+        raise ValueError(f"Invalid SRT timestamp: {value}")
     return hours * 3600 + minutes * 60 + seconds + millis / 1000
 
 
 def parse_srt(content: str) -> list[SubtitleEntry]:
-    normalized = content.replace("\r\n", "\n").replace("\r", "\n").strip()
-    if not normalized:
+    normalized = content.replace("\r\n", "\n").replace("\r", "\n")
+    if not normalized.strip():
         return []
+    normalized = normalized.strip("\n")
 
-    blocks = normalized.split("\n\n")
+    blocks = re.split(r"\n{2,}", normalized)
     entries: list[SubtitleEntry] = []
-    for block in blocks:
-        lines = [line for line in block.split("\n") if line]
+    for block_number, block in enumerate(blocks, start=1):
+        lines = block.split("\n")
         if len(lines) < 3:
-            continue
+            raise ValueError(
+                f"Invalid SRT cue block {block_number}: expected index, timestamp, and text."
+            )
 
-        time_match = SRT_TIME_RE.search(lines[1])
+        time_match = SRT_TIME_RE.fullmatch(lines[1])
         if time_match is None:
-            continue
+            raise ValueError(
+                f"Invalid SRT timestamp in cue block {block_number}: {lines[1]!r}"
+            )
 
         try:
             index = int(lines[0])
         except ValueError:
-            continue
+            raise ValueError(
+                f"Invalid SRT cue index in block {block_number}: {lines[0]!r}"
+            ) from None
+        if index < 0:
+            raise ValueError(f"Invalid SRT cue index in block {block_number}: {index}")
+
+        try:
+            start_time = parse_srt_timestamp(time_match.group("start"))
+            end_time = parse_srt_timestamp(time_match.group("end"))
+        except ValueError as error:
+            raise ValueError(f"Invalid SRT timestamp in cue block {block_number}: {error}") from error
+        if end_time <= start_time:
+            raise ValueError(
+                f"Invalid SRT range in cue block {block_number}: end must be after start."
+            )
+
+        text = "\n".join(lines[2:]).strip()
+        if not text:
+            raise ValueError(f"Empty SRT cue text in block {block_number}.")
 
         entries.append(
             SubtitleEntry(
                 index=index,
-                start_time=parse_srt_timestamp(time_match.group("start")),
-                end_time=parse_srt_timestamp(time_match.group("end")),
-                text="\n".join(lines[2:]).strip(),
+                start_time=start_time,
+                end_time=end_time,
+                text=text,
             )
         )
 
-    return entries
+    return sorted(entries, key=lambda entry: (entry.start_time, entry.index))
 
 
 def sidecar_srt_path(video_path: Path) -> Path:

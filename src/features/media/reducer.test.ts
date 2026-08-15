@@ -1,6 +1,35 @@
 import { describe, expect, it } from "bun:test";
 import { MAX_STORED_LOG_LINES } from "@/features/media/logs";
-import { createInitialMediaUiState, mediaReducer } from "@/features/media/reducer";
+import {
+  createInitialMediaUiState,
+  MAX_RETAINED_TASKS,
+  mediaReducer,
+} from "@/features/media/reducer";
+import { buildLatestTaskJobByInput } from "@/features/media/selectors";
+import { toJobId } from "@/features/shared/job-id";
+
+const clipJobId = toJobId("/tmp/clip.mp4");
+
+const completeTask = (state: Parameters<typeof mediaReducer>[0], taskId: string) =>
+  mediaReducer(
+    mediaReducer(state, {
+      payload: {
+        inputPaths: [`/tmp/${taskId}.mp4`],
+        taskId,
+        taskKind: "transcription",
+      },
+      type: "task_started",
+    }),
+    {
+      payload: {
+        summary: { cancelled: 0, failed: 0, ok: 1 },
+        taskId,
+        taskKind: "transcription",
+        type: "task_done",
+      },
+      type: "apply_task_event",
+    },
+  );
 
 describe("mediaReducer", () => {
   it("should map task events into queue state transitions", () => {
@@ -15,7 +44,7 @@ describe("mediaReducer", () => {
 
     const running = mediaReducer(started, {
       payload: {
-        jobId: "tmp-clip-mp4",
+        jobId: clipJobId,
         progressPct: 27,
         taskId: "task-1",
         taskKind: "transcription",
@@ -34,7 +63,7 @@ describe("mediaReducer", () => {
         artifacts: {
           summary: "Transcript written.",
         },
-        jobId: "tmp-clip-mp4",
+        jobId: clipJobId,
         outputPath: "/tmp/clip.srt",
         taskId: "task-1",
         taskKind: "transcription",
@@ -45,26 +74,6 @@ describe("mediaReducer", () => {
     expect(completed.tasksById["task-1"]?.jobs[0]?.status).toBe("completed");
     expect(completed.tasksById["task-1"]?.jobs[0]?.outputPath).toBe("/tmp/clip.srt");
     expect(completed.tasksById["task-1"]?.jobs[0]?.artifacts?.summary).toBe("Transcript written.");
-  });
-
-  it("should keep remove-music and editor task states isolated", () => {
-    const initial = {
-      ...createInitialMediaUiState(),
-      removeMusicSnapshot: {
-        "batch-1": "running",
-      },
-    };
-
-    const next = mediaReducer(initial, {
-      payload: {
-        inputPaths: ["/tmp/clip.mp4"],
-        taskId: "task-2",
-        taskKind: "flag",
-      },
-      type: "task_started",
-    });
-
-    expect(next.removeMusicSnapshot).toEqual(initial.removeMusicSnapshot);
   });
 
   it("should cap task log history to the recent window", () => {
@@ -81,7 +90,7 @@ describe("mediaReducer", () => {
       (state, index) =>
         mediaReducer(state, {
           payload: {
-            jobId: "tmp-clip-mp4",
+            jobId: clipJobId,
             message: `line-${index}`,
             stream: "stdout",
             taskId: "task-1",
@@ -106,11 +115,141 @@ describe("mediaReducer", () => {
     };
 
     const next = mediaReducer(seed, {
-      payload: "Unable to start task.",
+      payload: {
+        message: "Unable to start task.",
+        taskKind: "transcription",
+      },
       type: "task_start_error",
     });
 
     expect(next.errorMessage).toBe("Unable to start task.");
+    expect(next.errorTaskKind).toBe("transcription");
     expect(next.isLoadingVideos).toBe(true);
+  });
+
+  it("should clear a previous task start error when a new task starts", () => {
+    const seed = {
+      ...createInitialMediaUiState(),
+      errorMessage: "Previous task failed.",
+    };
+
+    const next = mediaReducer(seed, {
+      payload: {
+        inputPaths: ["/tmp/clip.mp4"],
+        taskId: "task-2",
+        taskKind: "transcription",
+      },
+      type: "task_started",
+    });
+
+    expect(next.errorMessage).toBeNull();
+  });
+
+  it("should retain only the latest terminal task history", () => {
+    const state = Array.from({ length: MAX_RETAINED_TASKS + 5 }, (_, index) => index).reduce(
+      (current, index) => completeTask(current, `task-${index}`),
+      createInitialMediaUiState(),
+    );
+
+    expect(Object.keys(state.tasksById)).toHaveLength(MAX_RETAINED_TASKS);
+    expect(state.tasksById["task-0"]).toBeUndefined();
+    expect(state.tasksById[`task-${MAX_RETAINED_TASKS + 4}`]).toBeDefined();
+    expect(Object.keys(state.tasksById).at(-1)).toBe(`task-${MAX_RETAINED_TASKS + 4}`);
+  });
+
+  it("should retain bounded log-free row outcomes after full tasks are pruned", () => {
+    const state = Array.from({ length: MAX_RETAINED_TASKS + 5 }, (_, index) => index).reduce(
+      (current, index) => {
+        const inputPath = `/tmp/summary-${index}.mp4`;
+        const taskId = `summary-${index}`;
+        const started = mediaReducer(current, {
+          payload: { inputPaths: [inputPath], taskId, taskKind: "transcription" },
+          type: "task_started",
+        });
+        const completed = mediaReducer(started, {
+          payload: {
+            jobId: toJobId(inputPath),
+            outputPath: `/tmp/summary-${index}.srt`,
+            taskId,
+            taskKind: "transcription",
+            type: "job_done",
+          },
+          type: "apply_task_event",
+        });
+        return mediaReducer(completed, {
+          payload: {
+            summary: { cancelled: 0, failed: 0, ok: 1 },
+            taskId,
+            taskKind: "transcription",
+            type: "task_done",
+          },
+          type: "apply_task_event",
+        });
+      },
+      createInitialMediaUiState(),
+    );
+    const jobs = buildLatestTaskJobByInput(
+      state.tasksById,
+      "transcription",
+      state.latestJobByKindAndInput,
+    );
+
+    expect(state.tasksById["summary-0"]).toBeUndefined();
+    expect(jobs["/tmp/summary-0.mp4"]?.outputPath).toBe("/tmp/summary-0.srt");
+    expect(jobs["/tmp/summary-0.mp4"]?.logs).toEqual([]);
+  });
+
+  it("should never evict nonterminal tasks when the active set exceeds the bound", () => {
+    const state = Array.from({ length: MAX_RETAINED_TASKS + 5 }, (_, index) => index).reduce(
+      (current, index) =>
+        mediaReducer(current, {
+          payload: {
+            inputPaths: [`/tmp/running-${index}.mp4`],
+            taskId: `running-${index}`,
+            taskKind: "flag",
+          },
+          type: "task_started",
+        }),
+      createInitialMediaUiState(),
+    );
+
+    expect(state.tasksById["running-0"]).toBeDefined();
+    expect(Object.keys(state.tasksById)).toHaveLength(MAX_RETAINED_TASKS + 5);
+  });
+
+  it("should retain the active task even when it is terminal", () => {
+    const state = Array.from({ length: MAX_RETAINED_TASKS }, (_, index) => index).reduce(
+      (current, index) => completeTask(current, `task-${index}`),
+      createInitialMediaUiState(),
+    );
+    const activeTask = state.tasksById[`task-${MAX_RETAINED_TASKS - 1}`];
+    if (!activeTask) {
+      throw new Error("Expected the latest task to exist.");
+    }
+
+    const overCapacity = {
+      ...state,
+      activeTaskId: activeTask.taskId,
+      tasksById: {
+        ...state.tasksById,
+        "task-extra": {
+          ...activeTask,
+          taskId: "task-extra",
+        },
+      },
+    };
+    const next = mediaReducer(overCapacity, {
+      payload: {
+        jobId: toJobId(`/tmp/task-${MAX_RETAINED_TASKS - 1}.mp4`),
+        message: "late terminal log",
+        stream: "stdout",
+        taskId: activeTask.taskId,
+        taskKind: "transcription",
+        type: "job_log",
+      },
+      type: "apply_task_event",
+    });
+
+    expect(next.tasksById[activeTask.taskId]).toBeDefined();
   });
 });

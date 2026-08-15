@@ -4,9 +4,183 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>al-iyaal kids media studio</title>
+    <style>
+      :root {
+        color: #2f1714;
+        background: #f8efe8;
+        font-family: "Avenir Next", "Segoe UI", sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body,
+      #root {
+        min-height: 100%;
+        margin: 0;
+      }
+
+      body {
+        background: linear-gradient(180deg, #f8efe8 0%, #f7f2ed 100%);
+      }
+
+      .boot-shell {
+        display: grid;
+        height: 100vh;
+        grid-template-columns: 160px minmax(0, 1fr);
+        overflow: hidden;
+        background: #fffdfb;
+      }
+
+      .boot-sidebar {
+        border-right: 1px solid #ead3c4;
+        background: linear-gradient(180deg, #fffaf7 0%, #fef7f2 100%);
+        padding: 14px 12px;
+      }
+
+      .boot-brand {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: #6a2924;
+        font-size: 12px;
+        font-weight: 600;
+      }
+
+      .boot-logo {
+        width: 28px;
+        height: 28px;
+        border: 1px solid #d8b7a4;
+        border-radius: 9px;
+        background: white;
+      }
+
+      .boot-nav {
+        height: 30px;
+        margin-top: 12px;
+        border-radius: 9px;
+        background: #f2dfd2;
+      }
+
+      .boot-nav-line {
+        width: 72%;
+        height: 8px;
+        margin-top: 10px;
+        border-radius: 999px;
+        background: #f3e4da;
+      }
+
+      .boot-content {
+        padding: 14px;
+        background: linear-gradient(180deg, #fffaf6, #fff7f0);
+      }
+
+      .boot-card {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        min-height: 96px;
+        border: 1px solid #ead3c4;
+        border-radius: 18px;
+        background: #fffdfb;
+        padding: 16px;
+        box-shadow: 0 12px 30px rgba(136, 50, 45, 0.08);
+      }
+
+      .boot-card .boot-logo {
+        width: 48px;
+        height: 48px;
+        border-radius: 14px;
+      }
+
+      .boot-title {
+        margin: 0;
+        color: #88322d;
+        font-size: 16px;
+        font-weight: 600;
+      }
+
+      .boot-copy {
+        margin: 4px 0 0;
+        color: #8f5e56;
+        font-size: 12px;
+      }
+
+      .boot-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 8px;
+        margin-top: 10px;
+      }
+
+      .boot-tile {
+        height: 76px;
+        border: 1px solid #ead3c4;
+        border-radius: 16px;
+        background: #fffaf7;
+      }
+
+      .boot-pulse {
+        animation: boot-pulse 1.4s ease-in-out infinite;
+      }
+
+      @keyframes boot-pulse {
+        50% {
+          opacity: 0.62;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .boot-pulse {
+          animation: none;
+        }
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="boot-shell" role="status" aria-label="Loading al-Iyaal Kids">
+        <aside class="boot-sidebar">
+          <div class="boot-brand">
+            <img
+              class="boot-logo"
+              src="/src-tauri/icons/128x128.png"
+              alt=""
+              width="28"
+              height="28"
+            />
+            <span>al-Iyaal Kids</span>
+          </div>
+          <div class="boot-nav boot-pulse"></div>
+          <div class="boot-nav-line boot-pulse"></div>
+          <div class="boot-nav-line boot-pulse"></div>
+          <div class="boot-nav-line boot-pulse"></div>
+        </aside>
+        <main class="boot-content">
+          <div class="boot-card">
+            <img
+              class="boot-logo"
+              src="/src-tauri/icons/128x128.png"
+              alt=""
+              width="48"
+              height="48"
+            />
+            <div>
+              <p class="boot-title">al-Iyaal Kids</p>
+              <p class="boot-copy">Preparing your local media studio...</p>
+            </div>
+          </div>
+          <div class="boot-grid" aria-hidden="true">
+            <div class="boot-tile boot-pulse"></div>
+            <div class="boot-tile boot-pulse"></div>
+            <div class="boot-tile boot-pulse"></div>
+            <div class="boot-tile boot-pulse"></div>
+          </div>
+        </main>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

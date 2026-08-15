@@ -1,6 +1,11 @@
 from pathlib import Path
 
-from al_iyaal_worker.tasks.transcribe import _sanitize_command_preview, parse_yap_progress_line
+from al_iyaal_worker.models import StartTranscriptionBatchCommand
+from al_iyaal_worker.tasks.transcribe import (
+    _sanitize_command_preview,
+    parse_yap_progress_line,
+    process_transcription_batch,
+)
 
 
 def test_should_parse_yap_progress_line() -> None:
@@ -38,3 +43,76 @@ def test_should_redact_local_paths_from_command_preview() -> None:
     assert "/Users/example" not in preview
     assert "sample.mp4" in preview
     assert "sample.srt" in preview
+
+
+def test_should_replace_a_transcript_only_after_success(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    video_path = tmp_path / "episode.mp4"
+    video_path.write_text("video", encoding="utf-8")
+    srt_path = tmp_path / "episode.srt"
+    srt_path.write_text("old transcript", encoding="utf-8")
+
+    class FakeProcess:
+        stdout = iter(["[ 100%] Complete\n"])
+
+        def wait(self) -> int:
+            return 0
+
+    def fake_popen(command: list[str], **_kwargs: object) -> FakeProcess:
+        Path(command[-1]).write_text("new transcript", encoding="utf-8")
+        return FakeProcess()
+
+    monkeypatch.setattr("al_iyaal_worker.tasks.transcribe.subprocess.Popen", fake_popen)
+    events: list[dict[str, object]] = []
+
+    process_transcription_batch(
+        StartTranscriptionBatchCommand(
+            task_id="task-1",
+            input_paths=[str(video_path)],
+            yap_mode="auto",
+        ),
+        events.append,
+        lambda: False,
+    )
+
+    assert srt_path.read_text(encoding="utf-8") == "new transcript"
+    assert any(event.get("type") == "job_done" for event in events)
+
+
+def test_should_preserve_a_transcript_when_a_rerun_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    video_path = tmp_path / "episode.mp4"
+    video_path.write_text("video", encoding="utf-8")
+    srt_path = tmp_path / "episode.srt"
+    srt_path.write_text("valid transcript", encoding="utf-8")
+
+    class FakeProcess:
+        stdout = iter([])
+
+        def wait(self) -> int:
+            return 1
+
+    def fake_popen(command: list[str], **_kwargs: object) -> FakeProcess:
+        Path(command[-1]).write_text("partial transcript", encoding="utf-8")
+        return FakeProcess()
+
+    monkeypatch.setattr("al_iyaal_worker.tasks.transcribe.subprocess.Popen", fake_popen)
+    events: list[dict[str, object]] = []
+
+    process_transcription_batch(
+        StartTranscriptionBatchCommand(
+            task_id="task-1",
+            input_paths=[str(video_path)],
+            yap_mode="auto",
+        ),
+        events.append,
+        lambda: False,
+    )
+
+    assert srt_path.read_text(encoding="utf-8") == "valid transcript"
+    assert not list(tmp_path.glob(".episode-*.srt"))
+    assert any(event.get("type") == "job_error" for event in events)

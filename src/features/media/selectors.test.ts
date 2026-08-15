@@ -5,6 +5,7 @@ import {
   buildLatestTaskOutputPathByInput,
   buildModerationResults,
   getLatestTask,
+  getLatestTaskForInput,
   getLatestTaskLogLine,
   getTaskOutputPath,
 } from "@/features/media/selectors";
@@ -28,6 +29,46 @@ describe("media selectors", () => {
 
     expect(getLatestTask(tasksById, "transcription")?.taskId).toBe("three");
     expect(getLatestTask(tasksById, "cut")).toBeUndefined();
+  });
+
+  it("should return the latest task for a given input path", () => {
+    const tasksById: Record<string, TaskState> = {
+      newer: {
+        jobs: [
+          {
+            fileName: "other.mp4",
+            inputPath: "/tmp/other.mp4",
+            jobId: "newer-job",
+            logs: [],
+            progressPct: 0,
+            status: "queued",
+          },
+        ],
+        status: "queued",
+        taskId: "newer",
+        taskKind: "transcription",
+      },
+      older: {
+        jobs: [
+          {
+            fileName: "episode.mp4",
+            inputPath: "/tmp/episode.mp4",
+            jobId: "older-job",
+            logs: [],
+            progressPct: 100,
+            status: "completed",
+          },
+        ],
+        status: "completed",
+        taskId: "older",
+        taskKind: "transcription",
+      },
+    };
+
+    expect(getLatestTaskForInput(tasksById, "transcription", "/tmp/episode.mp4")?.taskId).toBe(
+      "older",
+    );
+    expect(getLatestTaskForInput(tasksById, "transcription", "/tmp/missing.mp4")).toBeUndefined();
   });
 
   it("should return the latest non-empty task log line", () => {
@@ -223,9 +264,11 @@ describe("media selectors", () => {
       taskKind: "flag",
     };
     const sidecar: AnalysisSidecar = {
+      analysisCount: 1,
       createdAt: "2026-03-09T00:00:00.000Z",
       engine: "blacklist",
       flagged: [],
+      providers: ["blacklist"],
       summary: "ok",
       videoFileName: "episode.srt",
     };

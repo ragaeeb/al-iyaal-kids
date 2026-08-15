@@ -20,3 +20,6 @@ runtime = [
 addopts = "-q"
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[tool.setuptools.package-data]
+al_iyaal_worker = ["moderation/prompts/*.txt"]

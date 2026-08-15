@@ -3,19 +3,24 @@
   "app": {
     "security": {
       "assetProtocol": {
-        "enable": true,
-        "scope": ["**"]
+        "enable": false,
+        "scope": []
       },
-      "csp": null
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' data:; media-src 'self' http://127.0.0.1:*; style-src 'self' 'unsafe-inline'",
+      "devCsp": null
     },
     "windows": [
       {
+        "backgroundColor": "#f8efe8",
+        "decorations": true,
         "height": 900,
         "label": "main",
         "minHeight": 720,
         "minWidth": 1000,
         "resizable": true,
+        "theme": "Light",
         "title": "al-Iyaal Kids",
+        "titleBarStyle": "Visible",
         "width": 1320
       }
     ]

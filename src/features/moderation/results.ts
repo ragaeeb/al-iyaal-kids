@@ -1,16 +1,14 @@
 import type {
+  AnalysisBundle,
+  AnalysisRun,
   AnalysisSidecar,
   FlaggedSegment,
   TaskJobArtifacts,
   TaskJobRecord,
 } from "@/features/media/types";
+import { parseFlexibleTimeToSeconds } from "@/features/shared/timecode";
 
-type ModerationPriorityCounts = {
-  high: number;
-  medium: number;
-  low: number;
-};
-
+type ModerationPriorityCounts = { high: number; medium: number; low: number };
 type ModerationJobResult = {
   jobId: string;
   fileName: string;
@@ -20,161 +18,210 @@ type ModerationJobResult = {
   summary: string;
   segments: FlaggedSegment[];
 };
-
 type ModerationOverview = {
   totalFlagged: number;
   filesWithFlags: number;
   counts: ModerationPriorityCounts;
 };
 
-type RawAnalysisSidecar = Record<string, unknown> & {
-  createdAt?: unknown;
-  engine?: unknown;
-  flagged?: unknown;
-  summary?: unknown;
-  videoFileName?: unknown;
-};
-
 const flaggedMergeToleranceSeconds = 0.25;
+const priorityRanks = { high: 3, low: 1, medium: 2 } as const;
+const emptyPriorityCounts = (): ModerationPriorityCounts => ({ high: 0, low: 0, medium: 0 });
 
-const priorityRanks = {
-  high: 3,
-  low: 1,
-  medium: 2,
-} as const satisfies Record<FlaggedSegment["priority"], number>;
-
-const emptyPriorityCounts = (): ModerationPriorityCounts => ({
-  high: 0,
-  low: 0,
-  medium: 0,
-});
-
-const toFiniteNumber = (value: unknown) => {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
+const requiredString = (value: unknown, message: string) => {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(message);
   }
-
-  if (typeof value === "string") {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-
-  return null;
+  return value.trim();
 };
 
-const normalizeFlaggedSegment = (candidate: unknown): FlaggedSegment | null => {
-  if (!candidate || typeof candidate !== "object") {
-    return null;
+const optionalString = (value: unknown) =>
+  typeof value === "string" && value.trim() ? value.trim() : undefined;
+
+const parseFlaggedSegment = (candidate: unknown, index: number): FlaggedSegment => {
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+    throw new Error(`Invalid analysis flag ${index + 1}: expected an object.`);
   }
-
-  const segment = candidate as Partial<FlaggedSegment>;
-  const startTime = toFiniteNumber(segment.startTime);
-
+  const segment = candidate as Record<string, unknown>;
+  const startTime = parseFlexibleTimeToSeconds(segment.startTime);
   if (startTime === null) {
-    return null;
+    throw new Error(`Invalid analysis flag ${index + 1}: startTime must be a valid timecode.`);
   }
-
   if (segment.priority !== "high" && segment.priority !== "medium" && segment.priority !== "low") {
-    return null;
+    throw new Error(`Invalid analysis flag ${index + 1}: priority is unsupported.`);
   }
-
+  const endTime =
+    typeof segment.endTime === "number" &&
+    Number.isFinite(segment.endTime) &&
+    segment.endTime > startTime
+      ? segment.endTime
+      : undefined;
   return {
-    category: typeof segment.category === "string" ? segment.category : "",
-    endTime: toFiniteNumber(segment.endTime) ?? undefined,
+    category: optionalString(segment.category) ?? "",
+    cueIndex:
+      Number.isInteger(segment.cueIndex) && Number(segment.cueIndex) >= 0
+        ? Number(segment.cueIndex)
+        : undefined,
+    endTime,
     priority: segment.priority,
-    reason: typeof segment.reason === "string" ? segment.reason : "",
-    ruleId: typeof segment.ruleId === "string" ? segment.ruleId : "",
+    reason: requiredString(
+      segment.reason,
+      `Invalid analysis flag ${index + 1}: reason is required.`,
+    ),
+    ruleId: optionalString(segment.ruleId) ?? "",
     startTime,
-    text: typeof segment.text === "string" ? segment.text : "",
+    text: optionalString(segment.text) ?? "",
   };
 };
 
-const normalizeEngine = (value: unknown): AnalysisSidecar["engine"] =>
-  value === "gemini" || value === "nova_pro" || value === "blacklist" ? value : "blacklist";
+const parseAnalysisRun = (candidate: unknown, index: number): AnalysisRun => {
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+    throw new Error(`Invalid analysis entry ${index + 1}: expected an object.`);
+  }
+  const run = candidate as Record<string, unknown>;
+  if (!Array.isArray(run.flagged)) {
+    throw new Error(`Invalid analysis entry ${index + 1}: flagged must be an array.`);
+  }
+  const provider =
+    optionalString(run.provider) ??
+    optionalString(run.engine) ??
+    optionalString(run.model) ??
+    "external";
+  return {
+    createdAt: optionalString(run.createdAt) ?? optionalString(run.timestamp),
+    flagged: run.flagged.map(parseFlaggedSegment),
+    id: optionalString(run.id),
+    model: optionalString(run.model),
+    provider,
+    reasoning: optionalString(run.reasoning) ?? optionalString(run.strategy),
+    summary: requiredString(
+      run.summary,
+      `Invalid analysis entry ${index + 1}: summary is required.`,
+    ),
+  };
+};
 
-const firstNonEmptyString = (values: string[]) => values.find((value) => value.trim()) ?? "";
-
-const mergeUniqueText = (values: string[], separator: string) => {
-  const seen = new Set<string>();
-  const uniqueValues: string[] = [];
-
-  for (const value of values) {
-    const trimmed = value.trim();
-    if (!trimmed || seen.has(trimmed)) {
-      continue;
+const parseAnalysisBundle = (content: string, fallbackSourceFile = ""): AnalysisBundle => {
+  const parsed = JSON.parse(content) as unknown;
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    const candidate = parsed as Record<string, unknown>;
+    if (candidate.schemaVersion === 2) {
+      if (!Array.isArray(candidate.analyses)) {
+        throw new Error("Invalid analysis bundle: analyses must be an array.");
+      }
+      return {
+        analyses: candidate.analyses.map(parseAnalysisRun),
+        schemaVersion: 2,
+        sourceFile: optionalString(candidate.sourceFile) ?? fallbackSourceFile,
+      };
     }
-
-    seen.add(trimmed);
-    uniqueValues.push(trimmed);
   }
 
-  return uniqueValues.join(separator);
+  const entries = Array.isArray(parsed) ? parsed : [parsed];
+  if (entries.length === 0) {
+    throw new Error("Invalid analysis import: no analysis entries were found.");
+  }
+  const first = entries[0] as Record<string, unknown> | undefined;
+  return {
+    analyses: entries.map(parseAnalysisRun),
+    schemaVersion: 2,
+    sourceFile: optionalString(first?.videoFileName) ?? fallbackSourceFile,
+  };
 };
 
-const highestPriority = (
-  left: FlaggedSegment["priority"],
-  right: FlaggedSegment["priority"],
-): FlaggedSegment["priority"] => (priorityRanks[left] >= priorityRanks[right] ? left : right);
+const runFingerprint = (run: AnalysisRun) =>
+  JSON.stringify({
+    createdAt: run.createdAt ?? "",
+    flagged: run.flagged,
+    model: run.model ?? "",
+    provider: run.provider,
+    reasoning: run.reasoning ?? "",
+    summary: run.summary,
+  });
 
-const mergeEndTime = (left?: number, right?: number) => {
-  if (left === undefined) {
-    return right;
+const combineAnalysisBundles = (
+  existing: AnalysisBundle | null,
+  imports: AnalysisBundle[],
+  sourceFile: string,
+): AnalysisBundle => {
+  const analyses: AnalysisRun[] = [];
+  const fingerprints = new Set<string>();
+  for (const run of [
+    ...(existing?.analyses ?? []),
+    ...imports.flatMap((bundle) => bundle.analyses),
+  ]) {
+    const fingerprint = runFingerprint(run);
+    if (!fingerprints.has(fingerprint)) {
+      fingerprints.add(fingerprint);
+      analyses.push(run);
+    }
   }
-
-  if (right === undefined) {
-    return left;
-  }
-
-  return Math.max(left, right);
+  return { analyses, schemaVersion: 2, sourceFile: sourceFile || existing?.sourceFile || "" };
 };
 
-const chooseMostSpecificText = (left: string, right: string) =>
-  right.trim().length > left.trim().length ? right : left;
+const mergeText = (left: string, right: string, separator: string) =>
+  [...new Set([left.trim(), right.trim()].filter(Boolean))].join(separator);
 
-const mergeFlaggedSegment = (
-  existing: FlaggedSegment,
-  incoming: FlaggedSegment,
-): FlaggedSegment => ({
-  category: mergeUniqueText([existing.category, incoming.category], ", "),
-  endTime: mergeEndTime(existing.endTime, incoming.endTime),
-  priority: highestPriority(existing.priority, incoming.priority),
-  reason: mergeUniqueText([existing.reason, incoming.reason], "; "),
-  ruleId: mergeUniqueText([existing.ruleId, incoming.ruleId], ", "),
-  startTime: Math.min(existing.startTime, incoming.startTime),
-  text: chooseMostSpecificText(existing.text, incoming.text),
+const mergeSegment = (left: FlaggedSegment, right: FlaggedSegment): FlaggedSegment => ({
+  category: mergeText(left.category, right.category, ", "),
+  endTime:
+    left.endTime === undefined
+      ? right.endTime
+      : right.endTime === undefined
+        ? left.endTime
+        : Math.max(left.endTime, right.endTime),
+  priority:
+    priorityRanks[left.priority] >= priorityRanks[right.priority] ? left.priority : right.priority,
+  reason: mergeText(left.reason, right.reason, "; "),
+  ruleId: mergeText(left.ruleId, right.ruleId, ", "),
+  startTime: Math.min(left.startTime, right.startTime),
+  text: right.text.length > left.text.length ? right.text : left.text,
 });
 
 const mergeFlaggedSegments = (segments: FlaggedSegment[]) => {
   const merged: FlaggedSegment[] = [];
-
   for (const segment of [...segments].sort((left, right) => left.startTime - right.startTime)) {
-    const existingIndex = merged.findIndex(
+    const index = merged.findIndex(
       (entry) => Math.abs(entry.startTime - segment.startTime) <= flaggedMergeToleranceSeconds,
     );
-
-    if (existingIndex === -1) {
+    if (index < 0) {
       merged.push(segment);
-      continue;
+    } else {
+      const existing = merged[index];
+      if (existing) {
+        merged[index] = mergeSegment(existing, segment);
+      }
     }
-
-    const existing = merged[existingIndex];
-    if (!existing) {
-      merged.push(segment);
-      continue;
-    }
-
-    merged[existingIndex] = mergeFlaggedSegment(existing, segment);
   }
-
-  return merged.sort((left, right) => left.startTime - right.startTime);
+  return merged;
 };
+
+const toAnalysisSidecar = (bundle: AnalysisBundle): AnalysisSidecar => {
+  if (bundle.analyses.length === 0) {
+    throw new Error("Invalid analysis bundle: at least one analysis is required for display.");
+  }
+  const providers = [...new Set(bundle.analyses.map((run) => run.provider))];
+  return {
+    analysisCount: bundle.analyses.length,
+    createdAt: bundle.analyses.find((run) => run.createdAt)?.createdAt ?? "",
+    engine: providers[0] ?? "external",
+    flagged: mergeFlaggedSegments(bundle.analyses.flatMap((run) => run.flagged)),
+    providers,
+    summary: bundle.analyses
+      .map((run) => run.summary.trim())
+      .filter(Boolean)
+      .join("\n\n"),
+    videoFileName: bundle.sourceFile,
+  };
+};
+
+const parseAnalysisSidecar = (content: string): AnalysisSidecar =>
+  toAnalysisSidecar(parseAnalysisBundle(content));
 
 const toFlaggedCount = (job: TaskJobRecord, sidecar?: AnalysisSidecar) =>
   sidecar?.flagged.length ?? job.artifacts?.flaggedCount ?? 0;
-
 const toSummary = (job: TaskJobRecord, sidecar?: AnalysisSidecar) =>
   sidecar?.summary ?? job.artifacts?.summary ?? "No analysis summary available yet.";
-
 const toModerationJobResult = (
   job: TaskJobRecord,
   sidecar?: AnalysisSidecar,
@@ -188,93 +235,41 @@ const toModerationJobResult = (
   summary: toSummary(job, sidecar),
 });
 
-const buildModerationOverview = (jobs: ModerationJobResult[]): ModerationOverview => {
-  return jobs.reduce<ModerationOverview>(
+const buildModerationOverview = (jobs: ModerationJobResult[]): ModerationOverview =>
+  jobs.reduce<ModerationOverview>(
     (overview, job) => {
       overview.totalFlagged += job.flaggedCount;
-      if (job.flaggedCount > 0) {
-        overview.filesWithFlags += 1;
-      }
+      overview.filesWithFlags += job.flaggedCount > 0 ? 1 : 0;
       for (const segment of job.segments) {
         overview.counts[segment.priority] += 1;
       }
       return overview;
     },
-    {
-      counts: emptyPriorityCounts(),
-      filesWithFlags: 0,
-      totalFlagged: 0,
-    },
+    { counts: emptyPriorityCounts(), filesWithFlags: 0, totalFlagged: 0 },
   );
-};
-
-const parseAnalysisSidecarCandidate = (parsed: unknown): AnalysisSidecar => {
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("Invalid analysis sidecar shape");
-  }
-
-  const candidate = parsed as RawAnalysisSidecar;
-  if (!Array.isArray(candidate.flagged) || typeof candidate.summary !== "string") {
-    throw new Error("Invalid analysis sidecar shape");
-  }
-
-  const flagged = candidate.flagged
-    .map((entry) => normalizeFlaggedSegment(entry))
-    .filter((entry): entry is FlaggedSegment => entry !== null);
-
-  return {
-    createdAt: typeof candidate.createdAt === "string" ? candidate.createdAt : "",
-    engine: normalizeEngine(candidate.engine),
-    flagged,
-    summary: candidate.summary,
-    videoFileName: typeof candidate.videoFileName === "string" ? candidate.videoFileName : "",
-  };
-};
-
-const consolidateAnalysisSidecars = (sidecars: AnalysisSidecar[]): AnalysisSidecar => {
-  if (sidecars.length === 0) {
-    throw new Error("Invalid analysis sidecar shape");
-  }
-
-  const firstSidecar = sidecars[0];
-  if (!firstSidecar) {
-    throw new Error("Invalid analysis sidecar shape");
-  }
-
-  return {
-    createdAt: firstNonEmptyString(sidecars.map((sidecar) => sidecar.createdAt)),
-    engine:
-      sidecars.find((sidecar) => sidecar.engine !== "blacklist")?.engine ?? firstSidecar.engine,
-    flagged: mergeFlaggedSegments(sidecars.flatMap((sidecar) => sidecar.flagged)),
-    summary: sidecars
-      .map((sidecar) => sidecar.summary.trim())
-      .filter(Boolean)
-      .join("\n\n"),
-    videoFileName: firstNonEmptyString(sidecars.map((sidecar) => sidecar.videoFileName)),
-  };
-};
-
-const parseAnalysisSidecar = (content: string): AnalysisSidecar => {
-  const parsed = JSON.parse(content) as unknown;
-
-  if (Array.isArray(parsed)) {
-    return consolidateAnalysisSidecars(parsed.map((entry) => parseAnalysisSidecarCandidate(entry)));
-  }
-
-  return parseAnalysisSidecarCandidate(parsed);
-};
 
 const toJobArtifacts = (value: unknown): TaskJobArtifacts | undefined => {
   if (!value || typeof value !== "object") {
     return undefined;
   }
-
   const candidate = value as Partial<TaskJobArtifacts>;
-  return {
-    flaggedCount: typeof candidate.flaggedCount === "number" ? candidate.flaggedCount : undefined,
-    summary: typeof candidate.summary === "string" ? candidate.summary : undefined,
-  };
+  if (
+    (candidate.flaggedCount !== undefined &&
+      (!Number.isInteger(candidate.flaggedCount) || candidate.flaggedCount < 0)) ||
+    (candidate.summary !== undefined && typeof candidate.summary !== "string")
+  ) {
+    return undefined;
+  }
+  return { flaggedCount: candidate.flaggedCount, summary: candidate.summary };
 };
 
 export type { ModerationJobResult, ModerationOverview, ModerationPriorityCounts };
-export { buildModerationOverview, parseAnalysisSidecar, toJobArtifacts, toModerationJobResult };
+export {
+  buildModerationOverview,
+  combineAnalysisBundles,
+  parseAnalysisBundle,
+  parseAnalysisSidecar,
+  toAnalysisSidecar,
+  toJobArtifacts,
+  toModerationJobResult,
+};

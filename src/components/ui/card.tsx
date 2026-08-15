@@ -39,28 +39,8 @@ const CardTitle = ({ className, ...props }: HTMLAttributes<HTMLDivElement>) => (
   />
 );
 
-const CardDescription = ({ className, ...props }: HTMLAttributes<HTMLDivElement>) => (
-  <div
-    className={cn("text-[#8f5e56] text-xs leading-5", className)}
-    data-slot="card-description"
-    {...props}
-  />
-);
-
-const CardAction = ({ className, ...props }: HTMLAttributes<HTMLDivElement>) => (
-  <div
-    className={cn("col-start-2 row-span-2 row-start-1 self-start justify-self-end", className)}
-    data-slot="card-action"
-    {...props}
-  />
-);
-
 const CardContent = ({ className, ...props }: HTMLAttributes<HTMLDivElement>) => (
   <div className={cn("px-3", className)} data-slot="card-content" {...props} />
 );
 
-const CardFooter = ({ className, ...props }: HTMLAttributes<HTMLDivElement>) => (
-  <div className={cn("flex items-center px-3", className)} data-slot="card-footer" {...props} />
-);
-
-export { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle };
+export { Card, CardContent, CardHeader, CardTitle };

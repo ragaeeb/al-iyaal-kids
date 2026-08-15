@@ -93,6 +93,21 @@ pub struct SaveCutRangesRequest {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SaveAnalysisSidecarRequest {
+    pub video_path: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalysisPromptPreviewRequest {
+    pub engine: String,
+    pub content_criteria: String,
+    pub priority_guidelines: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CancelTaskRequest {
     pub task_id: String,
     pub mode: String,
@@ -241,63 +256,6 @@ pub enum WorkerStatusKind {
     Ready,
     Stopped,
     Error,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum AnalyticsTaskKind {
-    RemoveMusic,
-    Transcription,
-    Flag,
-    Cut,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct AnalyticsWorkRecord {
-    pub task_kind: AnalyticsTaskKind,
-    pub job_count: usize,
-    pub success_count: usize,
-    pub failed_count: usize,
-    pub cancelled_count: usize,
-    #[serde(default)]
-    pub flagged_item_count: usize,
-    #[serde(default)]
-    pub flagged_file_count: usize,
-    pub processing_minutes: u64,
-    pub completed_at_epoch_seconds: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct AnalyticsTotals {
-    pub total_media_processed: usize,
-    pub total_remove_music_jobs: usize,
-    pub total_transcription_jobs: usize,
-    pub total_flag_jobs: usize,
-    pub total_cut_jobs: usize,
-    pub total_flagged_items: usize,
-    pub total_files_with_flags: usize,
-    pub success_count: usize,
-    pub failure_count: usize,
-    pub cancelled_count: usize,
-    pub cumulative_processing_minutes: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct AnalyticsTaskKindBreakdown {
-    pub task_kind: AnalyticsTaskKind,
-    pub jobs: usize,
-    pub label: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct AnalyticsSnapshot {
-    pub totals: AnalyticsTotals,
-    pub breakdown: Vec<AnalyticsTaskKindBreakdown>,
-    pub recent_runs: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -566,6 +524,10 @@ pub struct ModerationSettings {
     #[serde(default = "default_analysis_strategy")]
     pub analysis_strategy: String,
     #[serde(default)]
+    pub agent_model: String,
+    #[serde(default)]
+    pub agent_reasoning_level: String,
+    #[serde(default)]
     pub google_api_key: String,
     #[serde(default)]
     pub amazon_nova_api_key: String,
@@ -575,12 +537,66 @@ pub struct ModerationSettings {
     pub rules: Vec<ModerationRule>,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalysisAgentModel {
+    pub id: String,
+    pub label: String,
+    pub reasoning_levels: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_reasoning_level: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalysisAgentCapability {
+    pub id: String,
+    pub label: String,
+    pub installed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub executable_name: Option<String>,
+    pub models: Vec<AnalysisAgentModel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 fn default_moderation_engine() -> String {
     "blacklist".to_string()
 }
 
 fn default_analysis_strategy() -> String {
     "fast".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ModerationSettings;
+
+    #[test]
+    fn should_default_agent_fields_for_cloud_settings_saved_before_agent_support() {
+        let settings = serde_json::from_str::<ModerationSettings>(
+            r#"{
+                "engine":"gemini",
+                "analysisStrategy":"deep",
+                "googleApiKey":"saved-google-key",
+                "amazonNovaApiKey":"saved-nova-key",
+                "contentCriteria":"criteria",
+                "priorityGuidelines":"guidelines",
+                "profanityWords":[],
+                "rules":[]
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(settings.engine, "gemini");
+        assert_eq!(settings.analysis_strategy, "deep");
+        assert_eq!(settings.google_api_key, "saved-google-key");
+        assert_eq!(settings.amazon_nova_api_key, "saved-nova-key");
+        assert!(settings.agent_model.is_empty());
+        assert!(settings.agent_reasoning_level.is_empty());
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -98,3 +98,45 @@ def test_should_emit_live_ffmpeg_progress_during_a_cut(
         if event.get("type") == "job_progress"
     ]
     assert progress_values == [5, 23, 42, 80]
+
+
+def test_should_preserve_an_existing_cut_when_export_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    video_path = tmp_path / "clip.mp4"
+    video_path.write_text("video", encoding="utf-8")
+    output_path = tmp_path / "video_cleaned" / "clip.mp4"
+    output_path.parent.mkdir()
+    output_path.write_text("valid cut", encoding="utf-8")
+
+    class FakeProcess:
+        returncode = 1
+        stdout = iter(["fatal ffmpeg error\n"])
+
+        def wait(self) -> int:
+            return self.returncode
+
+    def fake_popen(command: list[str], **_kwargs: object) -> FakeProcess:
+        Path(command[-1]).write_text("partial slice", encoding="utf-8")
+        return FakeProcess()
+
+    monkeypatch.setattr("al_iyaal_worker.tasks.cut.subprocess.Popen", fake_popen)
+    events: list[dict[str, object]] = []
+
+    process_cut_job(
+        command=StartCutJobCommand(
+            task_id="cut-task",
+            video_path=str(video_path),
+            ranges=[CutRange(start="0:01", end="0:02")],
+            output_mode="video_cleaned_default",
+            compression_preset="max_compression",
+        ),
+        emit=events.append,
+        should_cancel=lambda: False,
+    )
+
+    assert output_path.read_text(encoding="utf-8") == "valid cut"
+    assert not list(output_path.parent.glob(".clip-*.mp4"))
+    assert any(event.get("type") == "job_error" for event in events)
+    assert not any(event.get("type") == "job_done" for event in events)

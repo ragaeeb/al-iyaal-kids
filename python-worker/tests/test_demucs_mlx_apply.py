@@ -85,6 +85,24 @@ def test_should_reconstruct_vocals_through_overlap_add(shifts: int) -> None:
     np.testing.assert_allclose(np.asarray(vocals), wav_np, atol=1e-5)
 
 
+def test_should_report_monotonic_progress_for_processed_segments() -> None:
+    progress: list[float] = []
+
+    demucs_mlx_apply.separate_vocals_array(
+        IdentityModel(),
+        mx.ones((2, 237)),
+        shifts=0,
+        overlap=0.10,
+        batch_size=3,
+        seed=42,
+        on_progress=progress.append,
+    )
+
+    assert len(progress) >= 2
+    assert progress == sorted(progress)
+    assert progress[-1] == 1.0
+
+
 def test_should_disable_fused_metal_kernels_by_default(monkeypatch) -> None:
     metal_kernels = pytest.importorskip("demucs_mlx.metal_kernels")
     monkeypatch.delenv("AIYAAL_DEMUCS_MLX_FUSED_KERNELS", raising=False)

@@ -25,17 +25,18 @@ def emit_task_job_done(
     task_id: str,
     task_kind: str,
     job_id: str,
-    output_path: str | None = None,
+    output_path: str,
     artifacts: dict[str, Any] | None = None,
 ) -> None:
+    if not output_path.strip():
+        raise ValueError("job_done requires a non-empty output path")
     payload: dict[str, Any] = {
         "type": "job_done",
         "taskId": task_id,
         "taskKind": task_kind,
         "jobId": job_id,
+        "outputPath": output_path,
     }
-    if output_path is not None:
-        payload["outputPath"] = output_path
     if artifacts is not None:
         payload["artifacts"] = artifacts
     emit(payload)

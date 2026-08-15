@@ -1,10 +1,10 @@
-import { ChartColumn, ShieldCheck, WandSparkles } from "lucide-react";
+import { ShieldCheck, WandSparkles } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { type AppPage, appPages } from "@/features/app/navigation";
 
-import logoPng from "../../logo.png";
+import logoPng from "../../src-tauri/icons/128x128.png";
 
 type DashboardPanelProps = {
   onNavigate: (page: AppPage) => void;
@@ -38,15 +38,6 @@ const DashboardPanel = ({ onNavigate }: DashboardPanelProps) => {
                 <WandSparkles className="size-3" />
                 Open Remove Music
               </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="secondary"
-                onClick={() => onNavigate("analytics")}
-              >
-                <ChartColumn className="size-3" />
-                View Analytics
-              </Button>
             </div>
           </div>
         </CardContent>
@@ -63,8 +54,8 @@ const DashboardPanel = ({ onNavigate }: DashboardPanelProps) => {
         </CardHeader>
         <CardContent className="space-y-1 text-[#7f524a] text-xs leading-4">
           <p>No telemetry sent.</p>
-          <p>History and stats stay offline.</p>
-          <p>Tools run entirely on-device.</p>
+          <p>Your media stays on this device.</p>
+          <p>Core workflows run on-device; subtitle moderation can use opted-in providers.</p>
         </CardContent>
       </Card>
 

@@ -5,8 +5,11 @@ import {
   clampProgress,
   createQueuedJobs,
   dedupePaths,
+  isActiveBatchStatus,
   isSupportedVideoPath,
+  retainPathFlags,
   toAllowedExtensions,
+  toCancelOutcome,
 } from "@/features/batch/utils";
 import { toJobId } from "@/features/shared/job-id";
 
@@ -27,6 +30,27 @@ describe("batch utils", () => {
     expect(result).toEqual(["/tmp/a.mp4", "/tmp/b.mov"]);
   });
 
+  it("should identify only queued and running batches as active", () => {
+    expect(isActiveBatchStatus("queued")).toBe(true);
+    expect(isActiveBatchStatus("running")).toBe(true);
+    expect(isActiveBatchStatus("completed")).toBe(false);
+    expect(isActiveBatchStatus("cancelled")).toBe(false);
+  });
+
+  it("should discard flags for paths removed from the selection", () => {
+    expect(
+      retainPathFlags(
+        {
+          "/tmp/a.mp4": true,
+          "/tmp/b.mp4": false,
+        },
+        ["/tmp/a.mp4"],
+      ),
+    ).toEqual({
+      "/tmp/a.mp4": true,
+    });
+  });
+
   it("should mark only mp4/mov as supported video paths", () => {
     expect(isSupportedVideoPath("/tmp/clip.mp4")).toBe(true);
     expect(isSupportedVideoPath("/tmp/clip.mov")).toBe(true);
@@ -34,7 +58,9 @@ describe("batch utils", () => {
   });
 
   it("should build deterministic job ids", () => {
-    expect(toJobId("/tmp/My Clip 01.mov")).toBe("tmp-my-clip-01-mov");
+    expect(toJobId("/tmp/My Clip 01.mov")).toBe(
+      "tmp-my-clip-01-mov-67c00333ba0ddded529abdc463341963",
+    );
   });
 
   it("should create queued jobs from input paths", () => {
@@ -55,5 +81,17 @@ describe("batch utils", () => {
     const result = toAllowedExtensions([".mp4", ".mkv", ".mov"]);
 
     expect(result).toEqual([".mp4", ".mov"]);
+  });
+
+  it("should distinguish accepted and rejected cancellation responses", () => {
+    expect(toCancelOutcome({ accepted: true, batchId: "batch-1" })).toEqual({
+      accepted: true,
+      errorMessage: null,
+    });
+    expect(toCancelOutcome({ accepted: false, batchId: "batch-1" })).toEqual({
+      accepted: false,
+      errorMessage:
+        "Cancellation was not accepted because this batch is no longer active or has already finished.",
+    });
   });
 });

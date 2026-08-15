@@ -11,6 +11,7 @@ import {
   DrawerPopup,
   DrawerTitle,
 } from "@/components/ui/drawer";
+import { toSystemLogKey } from "@/features/system-log/logs";
 import { useSystemLog } from "@/features/system-log/useSystemLog";
 import { cn } from "@/lib/cn";
 
@@ -34,14 +35,15 @@ const isStderrLine = (line: string): boolean => {
 
 const SystemLogDrawer = ({ isSidebarCollapsed }: SystemLogDrawerProps) => {
   const [open, setOpen] = useState(false);
-  const { clearLogs, logs } = useSystemLog();
+  const { clearLogs, logs } = useSystemLog(open);
   const logContainerRef = useRef<HTMLDivElement>(null);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: scroll to bottom on new log entries or open
+  const latestLogId = logs.at(-1)?.id ?? null;
   useEffect(() => {
     if (open && logContainerRef.current) {
-      logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
+      const scrollHeight = logContainerRef.current.scrollHeight;
+      logContainerRef.current.scrollTop = latestLogId === null ? 0 : scrollHeight;
     }
-  }, [logs.length, open]);
+  }, [latestLogId, open]);
 
   return (
     <>
@@ -101,14 +103,13 @@ const SystemLogDrawer = ({ isSidebarCollapsed }: SystemLogDrawerProps) => {
                   {logs.length === 0 ? (
                     <p className="text-[#a0857c] italic">No logs recorded yet.</p>
                   ) : (
-                    logs.map((line, index) => {
-                      const error = isErrorLine(line);
-                      const stderr = isStderrLine(line);
+                    logs.map((entry) => {
+                      const error = isErrorLine(entry.text);
+                      const stderr = isStderrLine(entry.text);
 
                       return (
                         <div
-                          // biome-ignore lint/suspicious/noArrayIndexKey: log lines don't have stable IDs
-                          key={index}
+                          key={toSystemLogKey(entry)}
                           className={cn(
                             "whitespace-pre-wrap break-all py-0.5",
                             error
@@ -118,7 +119,7 @@ const SystemLogDrawer = ({ isSidebarCollapsed }: SystemLogDrawerProps) => {
                                 : "text-[#d1d5db]",
                           )}
                         >
-                          {line}
+                          {entry.text}
                         </div>
                       );
                     })

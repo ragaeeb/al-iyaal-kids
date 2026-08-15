@@ -4,13 +4,13 @@ use tauri::{AppHandle, Emitter};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::Command,
-    sync::mpsc,
+    sync::{mpsc, oneshot},
 };
 
 use crate::{
-    analytics,
     protocol::{
         parse_worker_event, to_frontend_batch_event, to_frontend_task_event, WorkerCommand,
+        WorkerEvent,
     },
     runtime::ensure_runtime_ready,
     state::AppState,
@@ -23,9 +23,36 @@ pub const SYSTEM_LOG_EVENT_NAME: &str = "system-log-line";
 
 async fn record_log(app: &AppHandle, state: &AppState, message: impl Into<String>) {
     let msg = message.into();
-    eprintln!("{msg}");
-    state.push_log_line(msg.clone()).await;
-    let _ = app.emit(SYSTEM_LOG_EVENT_NAME, msg);
+    let bounded_message = state.push_log_line(msg).await;
+    eprintln!("{bounded_message}");
+    let _ = app.emit(SYSTEM_LOG_EVENT_NAME, bounded_message);
+}
+
+async fn finalize_worker_completion(state: &AppState, event: &WorkerEvent) {
+    match event {
+        WorkerEvent::BatchDone { .. } => {
+            state.prune_terminal_history().await;
+        }
+        WorkerEvent::TaskDone { .. } => {
+            state.prune_terminal_history().await;
+        }
+        _ => {}
+    }
+}
+
+async fn emit_worker_event(app: &AppHandle, state: &AppState, event: &WorkerEvent) {
+    if let Some(frontend_event) = to_frontend_batch_event(event) {
+        let _ = app.emit(BATCH_EVENT_NAME, frontend_event);
+    }
+    if let Some(task_event) = to_frontend_task_event(event) {
+        let _ = app.emit(TASK_EVENT_NAME, task_event);
+    }
+    finalize_worker_completion(state, event).await;
+}
+
+async fn process_worker_event(app: &AppHandle, state: &AppState, event: &WorkerEvent) {
+    state.apply_worker_event(event).await;
+    emit_worker_event(app, state, event).await;
 }
 
 fn is_worker_stderr_error(line: &str) -> bool {
@@ -46,6 +73,7 @@ pub async fn ensure_worker_sender(
     app: AppHandle,
     state: AppState,
 ) -> Result<crate::state::WorkerSender, String> {
+    let _startup_guard = state.worker_start_lock.lock().await;
     if let Some(sender) = state.worker_sender().await {
         if !sender.is_closed() {
             return Ok(sender);
@@ -218,6 +246,7 @@ async fn spawn_worker_process(
 
     let app_for_stdout = app.clone();
     let state_for_stdout = state.clone();
+    let (stdout_finished_sender, stdout_finished_receiver) = oneshot::channel();
     tauri::async_runtime::spawn(async move {
         let mut reader = BufReader::new(stdout).lines();
 
@@ -239,57 +268,25 @@ async fn spawn_worker_process(
                     .await;
                     let _ = app_for_stdout.emit(
                         BATCH_EVENT_NAME,
-                        BatchEvent::worker_status(WorkerStatusKind::Error, error.clone()),
+                        BatchEvent::worker_status(
+                            WorkerStatusKind::Error,
+                            crate::state::bound_diagnostic_line(error.clone()),
+                        ),
                     );
                     let _ = app_for_stdout.emit(
                         TASK_EVENT_NAME,
-                        TaskEvent::worker_status(WorkerStatusKind::Error, error),
+                        TaskEvent::worker_status(
+                            WorkerStatusKind::Error,
+                            crate::state::bound_diagnostic_line(error),
+                        ),
                     );
                     continue;
                 }
             };
 
-            state_for_stdout.apply_worker_event(&parsed_event).await;
-            if let Some(frontend_event) = to_frontend_batch_event(&parsed_event) {
-                let _ = app_for_stdout.emit(BATCH_EVENT_NAME, frontend_event);
-            }
-            if let Some(task_event) = to_frontend_task_event(&parsed_event) {
-                let _ = app_for_stdout.emit(TASK_EVENT_NAME, task_event);
-            }
-            match &parsed_event {
-                crate::protocol::WorkerEvent::BatchDone { batch_id, .. } => {
-                    if let Some(batch) = state_for_stdout.get_batch(batch_id).await {
-                        let started_at = state_for_stdout.take_batch_started_at(batch_id).await;
-                        if let Err(error) =
-                            analytics::record_batch_completion(&app_for_stdout, &batch, started_at)
-                        {
-                            record_log(
-                                &app_for_stdout,
-                                &state_for_stdout,
-                                format!("analytics batch record error: {error}"),
-                            )
-                            .await;
-                        }
-                    }
-                }
-                crate::protocol::WorkerEvent::TaskDone { task_id, .. } => {
-                    if let Some(task) = state_for_stdout.get_task(task_id).await {
-                        let started_at = state_for_stdout.take_task_started_at(task_id).await;
-                        if let Err(error) =
-                            analytics::record_task_completion(&app_for_stdout, &task, started_at)
-                        {
-                            record_log(
-                                &app_for_stdout,
-                                &state_for_stdout,
-                                format!("analytics task record error: {error}"),
-                            )
-                            .await;
-                        }
-                    }
-                }
-                _ => {}
-            }
+            process_worker_event(&app_for_stdout, &state_for_stdout, &parsed_event).await;
         }
+        let _ = stdout_finished_sender.send(());
     });
 
     let app_for_stderr = app.clone();
@@ -310,35 +307,35 @@ async fn spawn_worker_process(
                 BATCH_EVENT_NAME,
                 BatchEvent::worker_status(
                     WorkerStatusKind::Error,
-                    format!("worker stderr: {line}"),
+                    crate::state::bound_diagnostic_line(format!("worker stderr: {line}")),
                 ),
             );
             let _ = app_for_stderr.emit(
                 TASK_EVENT_NAME,
-                TaskEvent::worker_status(WorkerStatusKind::Error, format!("worker stderr: {line}")),
+                TaskEvent::worker_status(
+                    WorkerStatusKind::Error,
+                    crate::state::bound_diagnostic_line(format!("worker stderr: {line}")),
+                ),
             );
         }
     });
 
     let app_for_wait = app.clone();
     let state_for_wait = state.clone();
+    let sender_for_wait = tx.clone();
     tauri::async_runtime::spawn(async move {
         let status = child.wait().await;
-        state_for_wait.clear_worker_sender().await;
-
-        let has_active_tasks = state_for_wait.tasks.lock().await.values().any(|task| {
-            matches!(
-                task.status,
-                crate::types::TaskStatus::Queued | crate::types::TaskStatus::Running
-            )
-        });
-        let has_active_batches = state_for_wait.batches.lock().await.values().any(|batch| {
-            matches!(
-                batch.status,
-                crate::types::BatchStatus::Queued | crate::types::BatchStatus::Running
-            )
-        });
-        let has_active_work = has_active_tasks || has_active_batches;
+        let _ = stdout_finished_receiver.await;
+        let terminal_events = state_for_wait
+            .terminalize_active_work("Worker process exited before completing this job.")
+            .await;
+        let has_active_work = !terminal_events.is_empty();
+        for event in &terminal_events {
+            emit_worker_event(&app_for_wait, &state_for_wait, event).await;
+        }
+        state_for_wait
+            .clear_worker_sender_if_current(&sender_for_wait)
+            .await;
 
         let (message, is_error) = match status {
             Ok(exit_status) if exit_status.success() && !has_active_work => {

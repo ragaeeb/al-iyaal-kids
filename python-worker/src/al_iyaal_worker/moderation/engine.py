@@ -1,11 +1,19 @@
 from collections import Counter
 from dataclasses import dataclass
 import re
-from typing import Any, Literal
+from typing import Any, Literal, Protocol, cast
+
+
+Priority = Literal["high", "medium", "low"]
+
+
+class _ProfanityChecker(Protocol):
+    def contains_profanity(self, text: str) -> bool: ...
+
 
 try:
-    from better_profanity import profanity
-except Exception:  # pragma: no cover - fallback for dev environments without runtime extras
+    from better_profanity import profanity as _better_profanity
+except ImportError:  # pragma: no cover - fallback for dev environments without runtime extras
     class _FallbackProfanity:
         _words = {"damn", "hell", "crap", "stupid"}
 
@@ -14,11 +22,12 @@ except Exception:  # pragma: no cover - fallback for dev environments without ru
             words = re.findall(r"[a-zA-Z']+", text.lower())
             return any(word in cls._words for word in words)
 
-    profanity = _FallbackProfanity()
+
+    profanity: _ProfanityChecker = _FallbackProfanity()
+else:
+    profanity = cast("_ProfanityChecker", _better_profanity)
 
 from ..subtitles import SubtitleEntry
-
-Priority = Literal["high", "medium", "low"]
 
 
 @dataclass(slots=True)
@@ -30,76 +39,54 @@ class ModerationRule:
     patterns: list[str]
 
 
-def default_rules() -> list[ModerationRule]:
-    return [
-        ModerationRule(
-            rule_id="aqeedah_christmas",
-            category="aqeedah",
-            priority="high",
-            reason="Promotes non-Islamic religious celebration.",
-            patterns=["christmas", "xmas", "easter"],
-        ),
-        ModerationRule(
-            rule_id="aqeedah_shirk",
-            category="aqeedah",
-            priority="high",
-            reason="Contains shirk-related expressions.",
-            patterns=["worship", "pray to", "god of", "goddess"],
-        ),
-        ModerationRule(
-            rule_id="magic_sorcery",
-            category="magic",
-            priority="high",
-            reason="References magic or sorcery.",
-            patterns=["spell", "sorcery", "magic ritual", "witchcraft", "summon"],
-        ),
-        ModerationRule(
-            rule_id="romance_dating",
-            category="relationships",
-            priority="medium",
-            reason="References romantic relationship themes.",
-            patterns=["boyfriend", "girlfriend", "date", "kiss", "romantic"],
-        ),
-        ModerationRule(
-            rule_id="violent_language",
-            category="violence",
-            priority="medium",
-            reason="Contains violent phrasing.",
-            patterns=["kill", "murder", "stab", "blood", "beat up"],
-        ),
-    ]
+PRIORITY_BY_NAME: dict[str, Priority] = {
+    "high": "high",
+    "medium": "medium",
+    "low": "low",
+}
 
 
 def _to_priority(value: str) -> Priority:
-    lowered = value.strip().lower()
-    if lowered in {"high", "medium", "low"}:
-        return lowered  # type: ignore[return-value]
-    return "medium"
+    return PRIORITY_BY_NAME.get(value.strip().lower(), "medium")
 
 
 def _normalize_rules(raw_rules: Any) -> list[ModerationRule]:
     if not isinstance(raw_rules, list):
-        return default_rules()
+        raise ValueError("Moderation settings must include a rules array.")
 
     normalized: list[ModerationRule] = []
-    for raw_rule in raw_rules:
+    for index, raw_rule in enumerate(raw_rules):
         if not isinstance(raw_rule, dict):
-            continue
-        patterns = raw_rule.get("patterns", [])
-        if not isinstance(patterns, list):
-            continue
+            raise ValueError(f"Moderation rule {index} must be an object.")
+
+        rule_id = raw_rule.get("ruleId")
+        category = raw_rule.get("category")
+        reason = raw_rule.get("reason")
+        priority = raw_rule.get("priority")
+        patterns = raw_rule.get("patterns")
+        if not all(
+            isinstance(value, str) and value.strip()
+            for value in (rule_id, category, reason, priority)
+        ):
+            raise ValueError(f"Moderation rule {index} has invalid metadata.")
+        if priority.strip().lower() not in PRIORITY_BY_NAME:
+            raise ValueError(f"Moderation rule {index} has invalid priority.")
+        if not isinstance(patterns, list) or not patterns or any(
+            not isinstance(pattern, str) or not pattern.strip() for pattern in patterns
+        ):
+            raise ValueError(f"Moderation rule {index} must contain non-empty patterns.")
 
         normalized.append(
             ModerationRule(
-                rule_id=str(raw_rule.get("ruleId", "custom_rule")),
-                category=str(raw_rule.get("category", "custom")),
-                priority=_to_priority(str(raw_rule.get("priority", "medium"))),
-                reason=str(raw_rule.get("reason", "Matched moderation rule.")),
-                patterns=[str(pattern).strip().lower() for pattern in patterns if str(pattern).strip()],
+                rule_id=rule_id.strip(),
+                category=category.strip(),
+                priority=_to_priority(priority),
+                reason=reason.strip(),
+                patterns=[pattern.strip().lower() for pattern in patterns],
             )
         )
 
-    return normalized if normalized else default_rules()
+    return normalized
 
 
 def _extract_custom_profanity_words(settings: dict[str, Any]) -> set[str]:
@@ -117,6 +104,10 @@ def _contains_custom_word(text: str, custom_words: set[str]) -> bool:
     return any(word in custom_words for word in words)
 
 
+def _compile_rule_pattern(pattern: str) -> re.Pattern[str]:
+    return re.compile(rf"(?<!\w){re.escape(pattern)}(?!\w)", re.IGNORECASE)
+
+
 def _priority_rank(priority: Priority) -> int:
     if priority == "high":
         return 3
@@ -130,6 +121,10 @@ def analyze_subtitles(
     settings: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], str]:
     rules = _normalize_rules(settings.get("rules"))
+    compiled_rules = [
+        (rule, tuple(_compile_rule_pattern(pattern) for pattern in rule.patterns))
+        for rule in rules
+    ]
     custom_profanity_words = _extract_custom_profanity_words(settings)
 
     flagged: list[dict[str, Any]] = []
@@ -155,10 +150,8 @@ def analyze_subtitles(
                     }
                 )
 
-        for rule in rules:
-            if not rule.patterns:
-                continue
-            if not any(pattern in lowered_text for pattern in rule.patterns):
+        for rule, patterns in compiled_rules:
+            if not any(pattern.search(lowered_text) for pattern in patterns):
                 continue
 
             key = (int(entry.start_time * 1000), rule.rule_id)

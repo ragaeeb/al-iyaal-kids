@@ -1,53 +1,89 @@
-import { useEffect, useState } from "react";
-
+import { useEffect, useRef, useState } from "react";
+import {
+  appendSystemLogEntry,
+  createInitialSystemLogState,
+  mergeSystemLogHistory,
+} from "@/features/system-log/logs";
 import { getLogHistory, subscribeToSystemLogs } from "@/features/system-log/transport";
 
-const MAX_LOG_LINES = 500;
+const registerLiveSystemLogListener = async (
+  isMounted: () => boolean,
+  onLine: (line: string) => void,
+): Promise<(() => void) | null> => {
+  try {
+    const registeredUnlisten = await subscribeToSystemLogs(onLine);
+    if (!isMounted()) {
+      registeredUnlisten();
+      return null;
+    }
 
-export const useSystemLog = () => {
-  const [logs, setLogs] = useState<string[]>([]);
+    return registeredUnlisten;
+  } catch {
+    return null;
+  }
+};
+
+const loadSystemLogHistory = async (
+  isCurrent: () => boolean,
+  onHistory: (history: string[]) => void,
+) => {
+  if (!isCurrent()) {
+    return;
+  }
+
+  try {
+    const history = await getLogHistory();
+    if (isCurrent()) {
+      onHistory(history);
+    }
+  } catch {
+    // History is best-effort; live events can still be displayed.
+  }
+};
+
+export const useSystemLog = (enabled = true) => {
+  const [logState, setLogState] = useState(createInitialSystemLogState);
+  const clearGenerationRef = useRef(0);
 
   useEffect(() => {
+    if (!enabled) {
+      setLogState(createInitialSystemLogState());
+      return;
+    }
+
     let mounted = true;
     let unlisten: (() => void) | null = null;
-
-    getLogHistory()
-      .then((history) => {
-        if (mounted) {
-          setLogs(history.slice(-MAX_LOG_LINES));
-        }
-      })
-      .catch(() => {
-        // Fallback for non-tauri or dev mock environments
-      });
+    const clearGeneration = clearGenerationRef.current;
 
     const setup = async () => {
-      unlisten = await subscribeToSystemLogs((line) => {
-        if (!mounted) {
-          return;
+      unlisten = await registerLiveSystemLogListener(mountedCheck, (line) => {
+        if (mounted) {
+          setLogState((previous) => appendSystemLogEntry(previous, line));
         }
-        setLogs((prev) => {
-          const next = [...prev, line];
-          if (next.length > MAX_LOG_LINES) {
-            return next.slice(next.length - MAX_LOG_LINES);
-          }
-          return next;
-        });
+      });
+      await loadSystemLogHistory(isCurrent, (history) => {
+        setLogState((previous) => mergeSystemLogHistory(previous, history));
       });
     };
 
-    setup().catch(() => {});
+    const mountedCheck = () => mounted;
+    const isCurrent = () => mounted && clearGenerationRef.current === clearGeneration;
+
+    void setup();
 
     return () => {
       mounted = false;
       unlisten?.();
     };
-  }, []);
+  }, [enabled]);
 
-  const clearLogs = () => setLogs([]);
+  const clearLogs = () => {
+    clearGenerationRef.current += 1;
+    setLogState(createInitialSystemLogState());
+  };
 
   return {
     clearLogs,
-    logs,
+    logs: logState.entries,
   };
 };

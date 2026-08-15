@@ -2,7 +2,6 @@ import { describe, expect, it } from "bun:test";
 
 import {
   buildVideoDeleteTargets,
-  isMissingDeleteTargetError,
   toAnalysisSidecarPath,
   toCutRangesSidecarPath,
   toSrtSidecarPath,
@@ -24,15 +23,5 @@ describe("video sidecars", () => {
       "/tmp/example.analysis.json",
       "/tmp/example.ranges.json",
     ]);
-  });
-
-  it("should treat missing sidecar paths as ignorable delete errors", () => {
-    expect(
-      isMissingDeleteTargetError("Failed resolving file path /tmp/example.srt: No such file"),
-    ).toBeTrue();
-    expect(isMissingDeleteTargetError(new Error("Path is not a file: /tmp/example.srt"))).toBe(
-      true,
-    );
-    expect(isMissingDeleteTargetError(new Error("Permission denied"))).toBe(false);
   });
 });

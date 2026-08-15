@@ -1,4 +1,4 @@
-mod analytics;
+mod analysis_agents;
 mod commands;
 mod file_discovery;
 mod ids;
@@ -89,11 +89,14 @@ pub fn run() {
             commands::get_task_state,
             commands::list_videos,
             commands::list_srt_files,
-            commands::get_analytics_snapshot,
             commands::get_moderation_settings,
+            commands::list_analysis_agents,
             commands::save_moderation_settings,
             commands::save_cut_ranges,
+            commands::save_analysis_sidecar,
             commands::read_text_file,
+            commands::read_analysis_import_file,
+            commands::get_analysis_prompt_preview,
             commands::get_media_preview_url,
             commands::trash_file,
             commands::open_folder_picker,

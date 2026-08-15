@@ -26,6 +26,12 @@ _COMPILED_FORWARD: dict[int, Callable[..., Any]] = {}
 _WEIGHT_CACHE: dict[tuple[int, str], Any] = {}
 
 
+def release_model_caches(model: Any) -> None:
+    """Drop compiled graphs for a model and shared Metal-backed weights."""
+    _COMPILED_FORWARD.pop(id(model), None)
+    _WEIGHT_CACHE.clear()
+
+
 def segment_stride(segment_length: int, overlap: float) -> int:
     """Distance between consecutive segment starts for a given overlap."""
     return int((1 - overlap) * segment_length)
@@ -64,7 +70,12 @@ def adapt_channels(wav: Any, channels: int) -> Any:
     raise ValueError(f"Audio has {current} channels but model expects {channels}.")
 
 
-def separate_vocals_from_file(separator: Any, input_path: Path) -> Any:
+def separate_vocals_from_file(
+    separator: Any,
+    input_path: Path,
+    *,
+    on_progress: Callable[[float], None],
+) -> Any:
     """Decode a media file and return its vocals stem as an MLX array."""
     import mlx.core as mx
 
@@ -87,6 +98,7 @@ def separate_vocals_from_file(separator: Any, input_path: Path) -> Any:
         overlap=float(separator.overlap),
         batch_size=int(separator.batch_size),
         seed=separator.seed,
+        on_progress=on_progress,
     )
 
 
@@ -98,6 +110,7 @@ def separate_vocals_array(
     overlap: float,
     batch_size: int,
     seed: int | None = None,
+    on_progress: Callable[[float], None] | None = None,
 ) -> Any:
     """Run the shift/split schedule and return vocals shaped [channels, time]."""
     import mlx.core as mx
@@ -113,11 +126,21 @@ def separate_vocals_array(
         padded = TensorChunk(mix).padded(length + 2 * max_shift)
         padded_chunk = TensorChunk(padded)
         out = None
-        for _ in range(int(shifts)):
+        for shift_index in range(int(shifts)):
             offset = rng.randint(0, max_shift)
             shifted = TensorChunk(padded_chunk, offset, length + max_shift - offset)
             shifted_out = _split_vocals(
-                model, shifted, overlap=overlap, batch_size=batch_size
+                model,
+                shifted,
+                overlap=overlap,
+                batch_size=batch_size,
+                on_progress=(
+                    None
+                    if on_progress is None
+                    else lambda progress, completed_shifts=shift_index: on_progress(
+                        (completed_shifts + progress) / shifts
+                    )
+                ),
             )
             trimmed = shifted_out[..., max_shift - offset :]
             out = trimmed if out is None else out + trimmed
@@ -125,7 +148,13 @@ def separate_vocals_array(
         mx.eval(out)
         return out[0, 0]
 
-    out = _split_vocals(model, TensorChunk(mix), overlap=overlap, batch_size=batch_size)
+    out = _split_vocals(
+        model,
+        TensorChunk(mix),
+        overlap=overlap,
+        batch_size=batch_size,
+        on_progress=on_progress,
+    )
     mx.eval(out)
     return out[0, 0]
 
@@ -158,7 +187,14 @@ def _transition_weight(segment_length: int, dtype: Any) -> Any:
     return weight
 
 
-def _split_vocals(model: Any, mix_chunk: Any, *, overlap: float, batch_size: int) -> Any:
+def _split_vocals(
+    model: Any,
+    mix_chunk: Any,
+    *,
+    overlap: float,
+    batch_size: int,
+    on_progress: Callable[[float], None] | None,
+) -> Any:
     import mlx.core as mx
 
     from demucs_mlx.apply_mlx import TensorChunk
@@ -183,6 +219,11 @@ def _split_vocals(model: Any, mix_chunk: Any, *, overlap: float, batch_size: int
 
     pending_inputs: list[Any] = []
     pending_offsets: list[int] = []
+    completed_segments = 0
+
+    def report_progress() -> None:
+        if on_progress is not None:
+            on_progress(completed_segments / len(offsets))
 
     # MLX >= 0.31.2 (the locked version) corrupts strided scatter-add slices,
     # so accumulate via read-modify-write slice assignment as upstream does.
@@ -195,6 +236,7 @@ def _split_vocals(model: Any, mix_chunk: Any, *, overlap: float, batch_size: int
         sum_weight[offset:end] = sum_weight[offset:end] + chunk_weight
 
     def flush() -> None:
+        nonlocal completed_segments
         if not pending_inputs:
             return
         stacked = mx.stack(pending_inputs)
@@ -208,6 +250,8 @@ def _split_vocals(model: Any, mix_chunk: Any, *, overlap: float, batch_size: int
             accumulate(center_trim(vocals_out[i], segment_length), offset, segment_length)
         # Eval once per flush to bound lazy-graph size, matching upstream.
         mx.eval(out, sum_weight)
+        completed_segments += len(pending_inputs)
+        report_progress()
         pending_inputs.clear()
         pending_offsets.clear()
 
@@ -230,6 +274,8 @@ def _split_vocals(model: Any, mix_chunk: Any, *, overlap: float, batch_size: int
         vocals_out = center_trim(tail_out, chunk_length)[:, vocals_idx : vocals_idx + 1]
         accumulate(vocals_out, offset, chunk_length)
         mx.eval(out, sum_weight)
+        completed_segments += 1
+        report_progress()
 
     flush()
 

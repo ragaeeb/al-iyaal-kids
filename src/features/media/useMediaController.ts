@@ -1,8 +1,13 @@
-import { useEffect, useReducer } from "react";
+import { type Dispatch, useEffect, useReducer, useRef } from "react";
 
 import { openFolderPicker } from "@/features/batch/transport";
+import { toTaskCancelOutcome } from "@/features/media/cancellation";
 import { MEDIA_ALLOWED_EXTENSIONS } from "@/features/media/constants";
-import { createInitialMediaUiState, mediaReducer } from "@/features/media/reducer";
+import {
+  createInitialMediaUiState,
+  type MediaUiAction,
+  mediaReducer,
+} from "@/features/media/reducer";
 import {
   cancelTask,
   getModerationSettings,
@@ -19,39 +24,169 @@ import type {
   CutRange,
   ModerationEngine,
   ModerationSettings,
+  TaskEvent,
+  TaskKind,
 } from "@/features/media/types";
+import {
+  appendBoundedEvent,
+  clearBoundedEventBuffer,
+  createBoundedEventBuffer,
+  drainBoundedEventBuffer,
+} from "@/features/shared/bounded-event-buffer";
+
+const MAX_PRE_REGISTRATION_TASK_EVENTS = 256;
+// Completed task IDs can leave the registry; active IDs stay known for delivery correctness.
+const MAX_REGISTERED_TASK_IDS = 256;
+type RegisteredTaskEvent = Exclude<TaskEvent, { type: "worker_status" }>;
+type Deferred = {
+  promise: Promise<void>;
+  resolve: () => void;
+  settled: boolean;
+};
+
+const createDeferred = (): Deferred => {
+  let resolvePromise = () => {};
+  const deferred: Deferred = {
+    promise: new Promise<void>((resolve) => {
+      resolvePromise = resolve;
+    }),
+    resolve: () => {},
+    settled: false,
+  };
+  deferred.resolve = () => {
+    if (deferred.settled) {
+      return;
+    }
+    deferred.settled = true;
+    resolvePromise();
+  };
+  return deferred;
+};
+
+const applyRegisteredTaskEvent = (
+  dispatch: Dispatch<MediaUiAction>,
+  terminalTaskIds: Set<string>,
+  event: RegisteredTaskEvent,
+) => {
+  dispatch({
+    payload: event,
+    type: "apply_task_event",
+  });
+  if (event.type === "task_done") {
+    terminalTaskIds.add(event.taskId);
+  }
+};
 
 export const useMediaController = () => {
   const [state, dispatch] = useReducer(mediaReducer, undefined, createInitialMediaUiState);
+  const registeredTaskIdsRef = useRef(new Set<string>());
+  const terminalTaskIdsRef = useRef(new Set<string>());
+  const preRegistrationEventsRef = useRef(
+    createBoundedEventBuffer<RegisteredTaskEvent>(MAX_PRE_REGISTRATION_TASK_EVENTS),
+  );
+  const taskEventsReadyRef = useRef<Deferred | null>(null);
+  if (!taskEventsReadyRef.current) {
+    taskEventsReadyRef.current = createDeferred();
+  }
 
   useEffect(() => {
     let mounted = true;
     let unlisten: (() => void) | null = null;
+    const previousReady = taskEventsReadyRef.current;
+    const taskEventsReady =
+      previousReady && !previousReady.settled ? previousReady : createDeferred();
+    taskEventsReadyRef.current = taskEventsReady;
 
     const setup = async () => {
-      unlisten = await subscribeToTaskEvents((event) => {
+      const registeredUnlisten = await subscribeToTaskEvents((event) => {
+        if (!mounted) {
+          return;
+        }
+        if (event.type === "worker_status") {
+          dispatch({
+            payload: event,
+            type: "apply_task_event",
+          });
+          return;
+        }
+
+        if (!registeredTaskIdsRef.current.has(event.taskId)) {
+          preRegistrationEventsRef.current = appendBoundedEvent(
+            preRegistrationEventsRef.current,
+            event,
+          );
+          return;
+        }
+
+        applyRegisteredTaskEvent(dispatch, terminalTaskIdsRef.current, event);
+      });
+
+      if (!mounted) {
+        registeredUnlisten();
+        return;
+      }
+
+      unlisten = registeredUnlisten;
+    };
+
+    setup()
+      .catch((error: unknown) => {
         if (!mounted) {
           return;
         }
         dispatch({
-          payload: event,
-          type: "apply_task_event",
+          payload: error instanceof Error ? error.message : "Failed to subscribe to task events.",
+          type: "load_videos_error",
         });
-      });
-    };
-
-    setup().catch((error: unknown) => {
-      dispatch({
-        payload: error instanceof Error ? error.message : "Failed to subscribe to task events.",
-        type: "load_videos_error",
-      });
-    });
+      })
+      .finally(() => taskEventsReady.resolve());
 
     return () => {
       mounted = false;
       unlisten?.();
+      taskEventsReady.resolve();
+      registeredTaskIdsRef.current.clear();
+      terminalTaskIdsRef.current.clear();
+      preRegistrationEventsRef.current = clearBoundedEventBuffer(preRegistrationEventsRef.current);
     };
   }, []);
+
+  const registerStartedTask = (payload: {
+    inputPaths: string[];
+    taskId: string;
+    taskKind: TaskKind;
+  }) => {
+    dispatch({
+      payload,
+      type: "task_started",
+    });
+    registeredTaskIdsRef.current.add(payload.taskId);
+    terminalTaskIdsRef.current.delete(payload.taskId);
+    while (registeredTaskIdsRef.current.size > MAX_REGISTERED_TASK_IDS) {
+      const oldestTerminalTaskId = [...registeredTaskIdsRef.current].find((taskId) =>
+        terminalTaskIdsRef.current.has(taskId),
+      );
+      if (!oldestTerminalTaskId) {
+        break;
+      }
+      registeredTaskIdsRef.current.delete(oldestTerminalTaskId);
+      terminalTaskIdsRef.current.delete(oldestTerminalTaskId);
+    }
+
+    const drained = drainBoundedEventBuffer(preRegistrationEventsRef.current);
+    preRegistrationEventsRef.current = drained.buffer;
+    for (const event of drained.events) {
+      if (event.taskId === payload.taskId) {
+        applyRegisteredTaskEvent(dispatch, terminalTaskIdsRef.current, event);
+        continue;
+      }
+
+      preRegistrationEventsRef.current = appendBoundedEvent(
+        preRegistrationEventsRef.current,
+        event,
+      );
+    }
+  };
 
   const setSelectedInputDir = (value: string) => {
     dispatch({
@@ -100,23 +235,24 @@ export const useMediaController = () => {
 
   const startTranscriptionForPaths = async (inputPaths: string[]) => {
     try {
+      await taskEventsReadyRef.current?.promise;
       const response = await startTranscriptionBatch({
         allowedExtensions: [...MEDIA_ALLOWED_EXTENSIONS],
         inputDir: inputPaths.length === 0 ? state.selectedInputDir : undefined,
         inputPaths: inputPaths.length > 0 ? inputPaths : undefined,
         yapMode: "auto",
       });
-      dispatch({
-        payload: {
-          inputPaths: response.inputPaths,
-          taskId: response.batchId,
-          taskKind: "transcription",
-        },
-        type: "task_started",
+      registerStartedTask({
+        inputPaths: response.inputPaths,
+        taskId: response.batchId,
+        taskKind: "transcription",
       });
     } catch (error: unknown) {
       dispatch({
-        payload: error instanceof Error ? error.message : "Failed starting transcription batch.",
+        payload: {
+          message: error instanceof Error ? error.message : "Failed starting transcription batch.",
+          taskKind: "transcription",
+        },
         type: "task_start_error",
       });
     }
@@ -136,6 +272,7 @@ export const useMediaController = () => {
     },
   ) => {
     try {
+      await taskEventsReadyRef.current?.promise;
       const response = await startFlagBatch({
         allowedExtensions: [".srt"],
         analysisStrategy: overrides?.analysisStrategy,
@@ -143,17 +280,17 @@ export const useMediaController = () => {
         inputDir: inputPaths.length === 0 ? state.selectedInputDir : undefined,
         inputPaths: inputPaths.length > 0 ? inputPaths : undefined,
       });
-      dispatch({
-        payload: {
-          inputPaths: response.inputPaths,
-          taskId: response.batchId,
-          taskKind: "flag",
-        },
-        type: "task_started",
+      registerStartedTask({
+        inputPaths: response.inputPaths,
+        taskId: response.batchId,
+        taskKind: "flag",
       });
     } catch (error: unknown) {
       dispatch({
-        payload: error instanceof Error ? error.message : "Failed starting flag batch.",
+        payload: {
+          message: error instanceof Error ? error.message : "Failed starting flag batch.",
+          taskKind: "flag",
+        },
         type: "task_start_error",
       });
     }
@@ -165,6 +302,7 @@ export const useMediaController = () => {
     compressionPreset: CompressionPreset = "max_compression",
   ) => {
     try {
+      await taskEventsReadyRef.current?.promise;
       const response = await startCutJob({
         compressionPreset,
         outputMode: "video_cleaned_default",
@@ -172,18 +310,18 @@ export const useMediaController = () => {
         videoPath,
       });
 
-      dispatch({
-        payload: {
-          inputPaths: [response.videoPath],
-          taskId: response.taskId,
-          taskKind: "cut",
-        },
-        type: "task_started",
+      registerStartedTask({
+        inputPaths: [response.videoPath],
+        taskId: response.taskId,
+        taskKind: "cut",
       });
       return response.taskId;
     } catch (error: unknown) {
       dispatch({
-        payload: error instanceof Error ? error.message : "Failed starting cut task.",
+        payload: {
+          message: error instanceof Error ? error.message : "Failed starting cut task.",
+          taskKind: "cut",
+        },
         type: "task_start_error",
       });
       return null;
@@ -194,18 +332,35 @@ export const useMediaController = () => {
     if (!taskId) {
       return;
     }
+    const taskKind = state.tasksById[taskId]?.taskKind ?? null;
     try {
-      await cancelTask({
-        mode: "stop_after_current",
-        taskId,
-      });
+      const outcome = toTaskCancelOutcome(
+        await cancelTask({
+          mode: "stop_after_current",
+          taskId,
+        }),
+      );
+      if (!outcome.accepted) {
+        dispatch({
+          payload: {
+            message: outcome.errorMessage,
+            taskKind,
+          },
+          type: "task_start_error",
+        });
+        return;
+      }
+
       dispatch({
         payload: taskId,
         type: "task_cancel_requested",
       });
     } catch (error: unknown) {
       dispatch({
-        payload: error instanceof Error ? error.message : "Failed requesting task cancellation.",
+        payload: {
+          message: error instanceof Error ? error.message : "Failed requesting task cancellation.",
+          taskKind,
+        },
         type: "task_start_error",
       });
     }

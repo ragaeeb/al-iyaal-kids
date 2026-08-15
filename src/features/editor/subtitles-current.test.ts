@@ -68,4 +68,16 @@ describe("findSubtitleAtTime", () => {
 
     expect(result?.text).toBe("Second line");
   });
+
+  it("should find a cue in a large sorted transcript without scanning from the end", () => {
+    const subtitles = Array.from({ length: 10_000 }, (_, index) => ({
+      endTime: index + 0.75,
+      index,
+      startTime: index,
+      text: `Cue ${index}`,
+    }));
+
+    expect(findSubtitleAtTime(subtitles, 12.5)?.text).toBe("Cue 12");
+    expect(findSubtitleAtTime(subtitles, 12.9)).toBeUndefined();
+  });
 });

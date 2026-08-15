@@ -23,6 +23,13 @@ type CanStartQueuedMediaActionInput = {
   workerStatus: MediaWorkerStatus;
 };
 
+type AnalysisPrerequisiteStatus = "ready" | "waiting" | "blocked" | "absent";
+
+type QuickActionQueueStateInput = {
+  queue: MediaQuickAction[];
+  tasksById: Record<string, TaskState>;
+};
+
 const toMediaQuickActionId = (kind: MediaQuickActionKind, inputPath: string) =>
   `${kind}:${inputPath}`;
 
@@ -87,6 +94,69 @@ const buildBatchAutoQuickActions = ({
 const hasActiveMediaTask = (tasksById: Record<string, TaskState>) =>
   Object.values(tasksById).some((task) => task.status === "queued" || task.status === "running");
 
+const getAnalysisPrerequisiteStatus = ({
+  queue,
+  subtitlePath,
+  tasksById,
+}: {
+  queue: MediaQuickAction[];
+  subtitlePath: string;
+  tasksById: Record<string, TaskState>;
+}): AnalysisPrerequisiteStatus => {
+  const transcriptionJobs = Object.values(tasksById)
+    .filter((task) => task.taskKind === "transcription")
+    .flatMap((task) => task.jobs);
+
+  if (
+    transcriptionJobs.some((job) => job.status === "completed" && job.outputPath === subtitlePath)
+  ) {
+    return "ready";
+  }
+
+  if (
+    transcriptionJobs.some(
+      (job) =>
+        (job.status === "queued" || job.status === "running") &&
+        toSrtSidecarPath(job.inputPath) === subtitlePath,
+    ) ||
+    queue.some(
+      (action) =>
+        action.kind === "transcription" && toSrtSidecarPath(action.inputPath) === subtitlePath,
+    )
+  ) {
+    return "waiting";
+  }
+
+  if (
+    transcriptionJobs.some(
+      (job) =>
+        (job.status === "failed" || job.status === "cancelled") &&
+        toSrtSidecarPath(job.inputPath) === subtitlePath,
+    )
+  ) {
+    return "blocked";
+  }
+
+  return "absent";
+};
+
+const retainReadyQuickActions = ({
+  queue,
+  tasksById,
+}: QuickActionQueueStateInput): MediaQuickAction[] =>
+  queue.filter((action) => {
+    if (action.kind !== "flag") {
+      return true;
+    }
+
+    const status = getAnalysisPrerequisiteStatus({
+      queue,
+      subtitlePath: action.inputPath,
+      tasksById,
+    });
+    return status === "ready" || status === "waiting";
+  });
+
 const canStartQueuedMediaAction = ({
   hasActiveBatch,
   hasActiveTask,
@@ -100,12 +170,20 @@ const canStartQueuedMediaAction = ({
   !isLaunching &&
   (workerStatus === "idle" || workerStatus === "ready" || workerStatus === "stopped");
 
-export type { AutoActionSettings, MediaQuickAction, MediaQuickActionKind, MediaWorkerStatus };
+export type {
+  AnalysisPrerequisiteStatus,
+  AutoActionSettings,
+  MediaQuickAction,
+  MediaQuickActionKind,
+  MediaWorkerStatus,
+};
 export {
   buildBatchAutoQuickActions,
   canStartQueuedMediaAction,
   enqueueMediaQuickAction,
+  getAnalysisPrerequisiteStatus,
   hasActiveMediaTask,
   removeMediaQuickAction,
+  retainReadyQuickActions,
   toMediaQuickActionId,
 };

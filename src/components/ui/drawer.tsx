@@ -1,5 +1,5 @@
 import { Drawer as DrawerPrimitive } from "@base-ui/react/drawer";
-import type { ReactNode } from "react";
+import type { ReactNode, Ref, UIEventHandler } from "react";
 
 import { cn } from "@/lib/cn";
 
@@ -8,11 +8,17 @@ type DrawerProps = DrawerPrimitive.Root.Props;
 type DrawerPopupProps = Omit<DrawerPrimitive.Popup.Props, "className"> & {
   className?: string;
   children: ReactNode;
+  showOverlay?: boolean;
 };
 
 type DrawerTextProps = {
   className?: string;
   children: ReactNode;
+};
+
+type DrawerBodyProps = DrawerTextProps & {
+  onScroll?: UIEventHandler<HTMLDivElement>;
+  ref?: Ref<HTMLDivElement>;
 };
 
 const Drawer = (props: DrawerProps) => {
@@ -35,10 +41,10 @@ const DrawerOverlay = ({ className }: { className?: string }) => {
   );
 };
 
-const DrawerPopup = ({ children, className, ...props }: DrawerPopupProps) => {
+const DrawerPopup = ({ children, className, showOverlay = true, ...props }: DrawerPopupProps) => {
   return (
     <DrawerPortal>
-      <DrawerOverlay />
+      {showOverlay ? <DrawerOverlay /> : null}
       <DrawerPrimitive.Popup
         data-slot="drawer-popup"
         className={cn(
@@ -73,8 +79,16 @@ const DrawerDescription = ({ children, className }: DrawerTextProps) => {
   );
 };
 
-const DrawerBody = ({ children, className }: DrawerTextProps) => {
-  return <div className={cn("mt-2 min-h-0 flex-1 overflow-auto pr-1", className)}>{children}</div>;
+const DrawerBody = ({ children, className, onScroll, ref }: DrawerBodyProps) => {
+  return (
+    <div
+      ref={ref}
+      onScroll={onScroll}
+      className={cn("mt-2 min-h-0 flex-1 overflow-auto pr-1", className)}
+    >
+      {children}
+    </div>
+  );
 };
 
 const DrawerClose = ({ children, className }: DrawerTextProps) => {

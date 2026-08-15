@@ -8,14 +8,13 @@ describe("system log transport", () => {
   });
 
   it("should invoke get_log_history command", async () => {
-    const mockInvoke = async (command: string) => {
+    const mockInvoke = async (command: "get_log_history") => {
       if (command === "get_log_history") {
         return ["line 1", "line 2"];
       }
       throw new Error(`Unexpected command ${command}`);
     };
 
-    // @ts-expect-error Mock invoke function
     const result = await getLogHistory(mockInvoke);
     expect(result).toEqual(["line 1", "line 2"]);
   });

@@ -4,8 +4,10 @@ import {
   buildBatchAutoQuickActions,
   canStartQueuedMediaAction,
   enqueueMediaQuickAction,
+  getAnalysisPrerequisiteStatus,
   hasActiveMediaTask,
   removeMediaQuickAction,
+  retainReadyQuickActions,
   toMediaQuickActionId,
 } from "@/features/media/quick-action-queue";
 import type { TaskState } from "@/features/media/types";
@@ -113,6 +115,143 @@ describe("media quick action queue", () => {
         workerStatus: "starting",
       }),
     ).toBe(false);
+  });
+
+  it("should wait for a queued transcription prerequisite", () => {
+    const queue = [
+      {
+        id: "transcription:/tmp/processed/a.mp4",
+        inputPath: "/tmp/processed/a.mp4",
+        kind: "transcription" as const,
+      },
+      {
+        id: "flag:/tmp/processed/a.srt",
+        inputPath: "/tmp/processed/a.srt",
+        kind: "flag" as const,
+      },
+    ];
+
+    expect(
+      getAnalysisPrerequisiteStatus({
+        queue,
+        subtitlePath: "/tmp/processed/a.srt",
+        tasksById: {},
+      }),
+    ).toBe("waiting");
+    expect(retainReadyQuickActions({ queue, tasksById: {} })).toEqual(queue);
+  });
+
+  it("should wait while the exact transcription prerequisite is running", () => {
+    const queue = [
+      {
+        id: "flag:/tmp/processed/a.srt",
+        inputPath: "/tmp/processed/a.srt",
+        kind: "flag" as const,
+      },
+    ];
+    const tasksById: Record<string, TaskState> = {
+      transcription: {
+        jobs: [
+          {
+            fileName: "a.mp4",
+            inputPath: "/tmp/processed/a.mp4",
+            jobId: "a",
+            logs: [],
+            progressPct: 60,
+            status: "running",
+          },
+        ],
+        status: "running",
+        taskId: "transcription",
+        taskKind: "transcription",
+      },
+    };
+
+    expect(
+      getAnalysisPrerequisiteStatus({
+        queue,
+        subtitlePath: "/tmp/processed/a.srt",
+        tasksById,
+      }),
+    ).toBe("waiting");
+  });
+
+  it("should mark analysis ready only for an exact completed subtitle output", () => {
+    const queue = [
+      {
+        id: "flag:/tmp/processed/a.srt",
+        inputPath: "/tmp/processed/a.srt",
+        kind: "flag" as const,
+      },
+    ];
+    const tasksById: Record<string, TaskState> = {
+      transcription: {
+        jobs: [
+          {
+            fileName: "a.mp4",
+            inputPath: "/tmp/processed/a.mp4",
+            jobId: "a",
+            logs: [],
+            outputPath: "/tmp/processed/a.srt",
+            progressPct: 100,
+            status: "completed",
+          },
+        ],
+        status: "completed",
+        taskId: "transcription",
+        taskKind: "transcription",
+      },
+    };
+
+    expect(
+      getAnalysisPrerequisiteStatus({
+        queue,
+        subtitlePath: "/tmp/processed/a.srt",
+        tasksById,
+      }),
+    ).toBe("ready");
+    expect(retainReadyQuickActions({ queue, tasksById })).toEqual(queue);
+  });
+
+  it("should remove dependent analysis after failed, cancelled, or absent transcription", () => {
+    const queue = [
+      {
+        id: "flag:/tmp/processed/a.srt",
+        inputPath: "/tmp/processed/a.srt",
+        kind: "flag" as const,
+      },
+    ];
+    const failedTask: TaskState = {
+      jobs: [
+        {
+          fileName: "a.mp4",
+          inputPath: "/tmp/processed/a.mp4",
+          jobId: "a",
+          logs: [],
+          progressPct: 0,
+          status: "failed",
+        },
+      ],
+      status: "completed",
+      taskId: "failed",
+      taskKind: "transcription",
+    };
+
+    expect(
+      getAnalysisPrerequisiteStatus({
+        queue,
+        subtitlePath: "/tmp/processed/a.srt",
+        tasksById: { failed: failedTask },
+      }),
+    ).toBe("blocked");
+    expect(retainReadyQuickActions({ queue, tasksById: { failed: failedTask } })).toEqual([]);
+    expect(
+      getAnalysisPrerequisiteStatus({
+        queue,
+        subtitlePath: "/tmp/processed/a.srt",
+        tasksById: {},
+      }),
+    ).toBe("absent");
   });
 
   it("should detect queued and running media tasks as active", () => {

@@ -1,16 +1,8 @@
-import type {
-  AnalysisStrategy,
-  ModerationEngine,
-  ModerationRule,
-  ModerationSettings,
-} from "@/features/media/types";
-import { analysisStrategyValues, moderationEngineValues } from "@/features/moderation/engines";
+import type { AnalysisStrategy, ModerationRule, ModerationSettings } from "@/features/media/types";
+import { analysisStrategyValues, isModerationEngine } from "@/features/moderation/engines";
 
 const isPriority = (value: string): value is "high" | "medium" | "low" =>
   value === "high" || value === "medium" || value === "low";
-
-const isEngine = (value: string): value is ModerationEngine =>
-  moderationEngineValues.includes(value as ModerationEngine);
 
 const isAnalysisStrategy = (value: string): value is AnalysisStrategy =>
   analysisStrategyValues.includes(value as AnalysisStrategy);
@@ -40,9 +32,11 @@ export const isValidModerationSettings = (value: unknown): value is ModerationSe
   const candidate = value as Partial<ModerationSettings>;
   return (
     typeof candidate.engine === "string" &&
-    isEngine(candidate.engine) &&
+    isModerationEngine(candidate.engine) &&
     typeof candidate.analysisStrategy === "string" &&
     isAnalysisStrategy(candidate.analysisStrategy) &&
+    typeof candidate.agentModel === "string" &&
+    typeof candidate.agentReasoningLevel === "string" &&
     typeof candidate.googleApiKey === "string" &&
     typeof candidate.amazonNovaApiKey === "string" &&
     typeof candidate.contentCriteria === "string" &&

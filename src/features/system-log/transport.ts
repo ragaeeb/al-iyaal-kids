@@ -1,8 +1,12 @@
-import { invoke, listen, type UnlistenFn } from "@/lib/tauri";
+import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export const SYSTEM_LOG_EVENT_NAME = "system-log-line";
 
-export const getLogHistory = (invokeFn = invoke) => invokeFn<string[]>("get_log_history");
+type GetLogHistoryInvoke = (command: "get_log_history") => Promise<string[]>;
+
+export const getLogHistory = (invokeFn: GetLogHistoryInvoke = invoke) =>
+  invokeFn("get_log_history");
 
 export const subscribeToSystemLogs = async (
   onLine: (line: string) => void,

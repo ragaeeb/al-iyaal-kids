@@ -6,6 +6,7 @@ vocal stem to CPU, and writes it to the worker's temporary-file contract so
 the existing ffmpeg/remux path remains unchanged.
 """
 
+import gc
 import os
 import shutil
 import tempfile
@@ -13,9 +14,18 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from .audio_separation import SeparatedAudio
+from .audio_separation import SeparatedAudio, SeparationProgress
 
 DEFAULT_MODEL_NAME = "htdemucs"
+
+
+def release_mlx_memory() -> None:
+    """Return inactive MLX/Metal allocations to macOS after a batch."""
+    import mlx.core as mx
+
+    gc.collect()
+    mx.synchronize()
+    mx.clear_cache()
 
 
 def disable_fused_metal_kernels() -> None:
@@ -43,7 +53,7 @@ class DemucsMlxSeparator:
         self,
         model_dir: Path,
         separator_factory: Callable[..., Any] | None = None,
-        apply_fn: Callable[[Any, Path], Any] | None = None,
+        apply_fn: Callable[..., Any] | None = None,
     ) -> None:
         # demucs-mlx owns its cache under the standard user cache directory;
         # retain model_dir in the adapter for the stable facade contract.
@@ -52,12 +62,14 @@ class DemucsMlxSeparator:
         self._apply_fn = apply_fn
         self._separator: Any | None = None
 
-    def separate_vocals(self, input_path: Path) -> SeparatedAudio:
+    def separate_vocals(
+        self, input_path: Path, on_progress: SeparationProgress
+    ) -> SeparatedAudio:
         separator = self._get_separator()
         work_dir = Path(tempfile.mkdtemp(prefix="al-iyaal-demucs-mlx-separation-"))
         try:
             apply_fn = self._apply_fn or self._load_apply_fn()
-            vocals = apply_fn(separator, input_path)
+            vocals = apply_fn(separator, input_path, on_progress=on_progress)
             vocals_path = work_dir / f"{input_path.stem}_(Vocals).wav"
             self._write_audio(vocals_path, vocals, int(separator.samplerate))
             return SeparatedAudio(vocals_path=vocals_path, work_dir=work_dir)
@@ -68,6 +80,15 @@ class DemucsMlxSeparator:
     def cleanup(self, separated_audio: SeparatedAudio) -> None:
         shutil.rmtree(separated_audio.work_dir, ignore_errors=True)
 
+    def release(self) -> None:
+        separator = self._separator
+        if separator is not None:
+            from .demucs_mlx_apply import release_model_caches, resolve_inner_model
+
+            release_model_caches(resolve_inner_model(separator.model))
+        self._separator = None
+        release_mlx_memory()
+
     def _get_separator(self) -> Any:
         if self._separator is None:
             factory = self._separator_factory or self._load_separator_factory()
@@ -76,6 +97,7 @@ class DemucsMlxSeparator:
                 shifts=int(os.getenv("AIYAAL_DEMUCS_MLX_SHIFTS", "1")),
                 overlap=float(os.getenv("AIYAAL_DEMUCS_MLX_OVERLAP", "0.10")),
                 split=True,
+                seed=int(os.getenv("AIYAAL_DEMUCS_MLX_SEED", "0")),
                 jobs=int(os.getenv("AIYAAL_DEMUCS_MLX_JOBS", "0")),
                 batch_size=int(os.getenv("AIYAAL_DEMUCS_MLX_BATCH_SIZE", "8")),
             )

@@ -2,11 +2,18 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SIGN_NOTARIZE_SCRIPT="$ROOT_DIR/scripts/sign-notarize-macos.sh"
 
 cd "$ROOT_DIR"
 
-./scripts/check.sh
-bun run tauri:build -- --target aarch64-apple-darwin
+for argument in "$@"; do
+  case "$argument" in
+    --help | -h | --preflight)
+      exec "$SIGN_NOTARIZE_SCRIPT" "$@"
+      ;;
+  esac
+done
 
-echo "Unsigned artifact generated in src-tauri/target/aarch64-apple-darwin/release/bundle."
-echo "Set APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY, APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, and APPLE_TEAM_ID for notarized release automation."
+"$SIGN_NOTARIZE_SCRIPT" --preflight "$@"
+./scripts/check.sh
+exec "$SIGN_NOTARIZE_SCRIPT" "$@"

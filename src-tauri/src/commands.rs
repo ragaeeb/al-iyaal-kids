@@ -166,8 +166,11 @@ fn ensure_supported_cut_output_mode(output_mode: &str) -> Result<(), String> {
 }
 
 fn ensure_supported_compression_preset(preset: &str) -> Result<(), String> {
-    if preset != "max_compression" && preset != "balanced" {
-        return Err("Unsupported compression preset. Use max_compression or balanced.".to_string());
+    if preset != "apple_silicon" && preset != "max_compression" && preset != "balanced" {
+        return Err(
+            "Unsupported compression preset. Use apple_silicon, max_compression, or balanced."
+                .to_string(),
+        );
     }
 
     Ok(())
@@ -1295,6 +1298,7 @@ mod tests {
 
     #[test]
     fn should_accept_supported_compression_presets() {
+        assert!(ensure_supported_compression_preset("apple_silicon").is_ok());
         assert!(ensure_supported_compression_preset("max_compression").is_ok());
         assert!(ensure_supported_compression_preset("balanced").is_ok());
     }

@@ -31,7 +31,7 @@ Local-first Tauri v2 desktop app (macOS-first) for Muslim families to remove mus
   - `Flagged Sections` drawer can load existing sibling `.analysis.json` files or generate new ones
   - the JSON import area accepts external analysis results and copies a provider-specific prompt without rendering the full prompt
   - per-run subtitle analysis engine and cloud strategy selection, using the saved local-agent model and reasoning defaults from Settings
-  - exact range export writes to `video_cleaned/`
+  - exact range export writes to `video_cleaned/` and defaults to Apple VideoToolbox HEVC on supported Macs
   - deleting the current video can also trash matching `.srt`, `.analysis.json`, and `.ranges.json` sidecars
 - `Settings`
   - stores Gemini and Nova API keys locally in app data
@@ -93,6 +93,7 @@ Notes:
 - `python-worker/` Python daemon and media-processing pipeline, including subtitle moderation and local CLI agent helpers
 - `scripts/` bootstrap, check, release, and version sync helpers
 - `docs/analysis-providers.md` analysis engine, local agent, model, reasoning, and troubleshooting notes
+- `docs/video-export.md` cut-export architecture, quality presets, and performance benchmark
 - `.github/workflows/` CI and semantic-release pipelines
 - `PRIVACY.md` local-first privacy policy
 - `AGENTS.md` AI contributor conventions
@@ -117,10 +118,16 @@ Frontend-only Vite server:
 bun run web:dev
 ```
 
-Sign and notarize a macOS DMG locally:
+Validate local Apple signing and notarization access without building or submitting anything:
 
 ```bash
-bun run sign:macos
+bun run release:macos:preflight
+```
+
+Run the complete checked, signed, notarized, and stapled macOS release:
+
+```bash
+bun run release:macos
 ```
 
 Bootstrap or refresh the local `notarytool` keychain profile only:
@@ -203,7 +210,9 @@ Useful checks:
 ## macOS signing and notarization
 
 - primary guide: `docs/macos-signing-notarization.md`
-- local DX script: `scripts/sign-notarize-macos.sh`
+- read-only credential check: `bun run release:macos:preflight`
+- complete local release: `bun run release:macos`
+- lower-level signing/notarization script: `scripts/sign-notarize-macos.sh`
 - official references:
   - [Tauri v2 macOS signing](https://v2.tauri.app/distribute/sign/macos/)
   - [Apple notarizing macOS software before distribution](https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution)

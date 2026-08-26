@@ -1386,8 +1386,9 @@ const EditorToolbar = ({
         disabled={isCutTaskActive}
         className="h-8 rounded-[14px] border border-[#d9b7a5] bg-white px-2 text-[#4f1f1a] text-xs outline-none transition focus:border-[#88322d] focus:ring-[#c57267]/25 focus:ring-[2px] disabled:opacity-50"
       >
-        <option value="max_compression">Max compression (HEVC)</option>
-        <option value="balanced">Balanced (H.264)</option>
+        <option value="apple_silicon">Fast high quality (Apple HEVC)</option>
+        <option value="max_compression">Smallest file (slow HEVC)</option>
+        <option value="balanced">Compatibility (slow H.264)</option>
       </select>
     </label>
     <Button
@@ -1559,7 +1560,7 @@ const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProp
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
   const [isDeletingVideo, setIsDeletingVideo] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [compressionPreset, setCompressionPreset] = useState<CompressionPreset>("max_compression");
+  const [compressionPreset, setCompressionPreset] = useState<CompressionPreset>("apple_silicon");
   const [isDropTargetActive, setIsDropTargetActive] = useState(false);
   const [sidecarRefreshKey, setSidecarRefreshKey] = useState(0);
   const [subtitles, setSubtitles] = useState<SubtitleEntry[]>([]);

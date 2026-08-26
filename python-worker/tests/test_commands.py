@@ -1,12 +1,11 @@
 from pathlib import Path
 
 from al_iyaal_worker.commands import (
-    build_ffmpeg_concat_command,
+    build_ffmpeg_cut_command,
     build_ffmpeg_command,
-    build_ffmpeg_slice_command,
     build_transcribe_command,
     build_video_cleaned_output_path,
-    generate_concat_file_content,
+    generate_cut_concat_file_content,
 )
 
 
@@ -60,53 +59,76 @@ def test_should_build_transcribe_command() -> None:
     ]
 
 
-def test_should_build_ffmpeg_slice_command_with_max_compression() -> None:
-    command = build_ffmpeg_slice_command(
+def test_should_build_ffmpeg_cut_command_with_max_compression() -> None:
+    command = build_ffmpeg_cut_command(
         ffmpeg_path="/usr/local/bin/ffmpeg",
-        video_path=Path("/tmp/input.mp4"),
-        output_path=Path("/tmp/slice-0.mp4"),
-        start_seconds=12.5,
-        duration_seconds=5.0,
+        concat_file_path=Path("/tmp/ranges.ffconcat"),
+        output_path=Path("/tmp/output.mp4"),
         compression_preset="max_compression",
     )
 
+    assert "libx265" in command
+    assert "28" in command
+    assert "slow" in command
+
+
+def test_should_build_single_pass_apple_silicon_cut_command() -> None:
+    command = build_ffmpeg_cut_command(
+        ffmpeg_path="/opt/homebrew/bin/ffmpeg",
+        concat_file_path=Path("/tmp/ranges.ffconcat"),
+        output_path=Path("/tmp/output.mp4"),
+        compression_preset="apple_silicon",
+    )
+
     assert command == [
-        "/usr/local/bin/ffmpeg",
+        "/opt/homebrew/bin/ffmpeg",
         "-y",
-        "-ss",
-        "12.5",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-copyts",
+        "-segment_time_metadata",
+        "1",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
         "-i",
-        "/tmp/input.mp4",
-        "-t",
-        "5.0",
+        "/tmp/ranges.ffconcat",
+        "-vf",
+        "select=concatdec_select,setpts=PTS-STARTPTS",
+        "-af",
+        "aselect=concatdec_select,asetpts=PTS-STARTPTS",
+        "-fps_mode",
+        "passthrough",
         "-progress",
         "pipe:1",
         "-nostats",
         "-c:v",
-        "libx265",
-        "-crf",
-        "28",
-        "-preset",
-        "slow",
+        "hevc_videotoolbox",
+        "-q:v",
+        "75",
+        "-prio_speed",
+        "0",
+        "-spatial_aq",
+        "1",
+        "-allow_sw",
+        "0",
         "-tag:v",
         "hvc1",
         "-c:a",
         "aac",
         "-b:a",
-        "64k",
-        "-ac",
-        "1",
-        "/tmp/slice-0.mp4",
+        "192k",
+        "/tmp/output.mp4",
     ]
 
 
-def test_should_build_ffmpeg_slice_command_with_balanced_preset() -> None:
-    command = build_ffmpeg_slice_command(
+def test_should_build_ffmpeg_cut_command_with_balanced_preset() -> None:
+    command = build_ffmpeg_cut_command(
         ffmpeg_path="/usr/local/bin/ffmpeg",
-        video_path=Path("/tmp/input.mp4"),
-        output_path=Path("/tmp/slice-0.mp4"),
-        start_seconds=0.0,
-        duration_seconds=1.0,
+        concat_file_path=Path("/tmp/ranges.ffconcat"),
+        output_path=Path("/tmp/output.mp4"),
         compression_preset="balanced",
     )
 
@@ -115,41 +137,23 @@ def test_should_build_ffmpeg_slice_command_with_balanced_preset() -> None:
     assert "veryslow" in command
 
 
-def test_should_build_ffmpeg_concat_command() -> None:
-    command = build_ffmpeg_concat_command(
-        ffmpeg_path="/usr/local/bin/ffmpeg",
-        concat_file_path=Path("/tmp/concat.txt"),
-        output_path=Path("/tmp/output.mp4"),
+def test_should_generate_cut_ranges_for_the_concat_demuxer() -> None:
+    content = generate_cut_concat_file_content(
+        Path("/tmp/children's episode.mp4"),
+        [(1.25, 3.5), (10.0, 12.75)],
     )
 
-    assert command == [
-        "/usr/local/bin/ffmpeg",
-        "-y",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-nostats",
-        "-f",
-        "concat",
-        "-safe",
-        "0",
-        "-i",
-        "/tmp/concat.txt",
-        "-c",
-        "copy",
-        "/tmp/output.mp4",
-    ]
-
-
-def test_should_generate_concat_file_content() -> None:
-    content = generate_concat_file_content([Path("/tmp/slice-0.mp4"), Path("/tmp/slice-1.mp4")])
-    assert content == "file '/tmp/slice-0.mp4'\nfile '/tmp/slice-1.mp4'"
-
-
-def test_should_escape_unsafe_paths_in_concat_file_content() -> None:
-    content = generate_concat_file_content([Path("/tmp/child's clip.mp4")])
-
-    assert content == "file '/tmp/child'\\''s clip.mp4'"
+    assert content == "\n".join(
+        [
+            "ffconcat version 1.0",
+            "file '/tmp/children'\\''s episode.mp4'",
+            "inpoint 1.25",
+            "outpoint 3.5",
+            "file '/tmp/children'\\''s episode.mp4'",
+            "inpoint 10.0",
+            "outpoint 12.75",
+        ]
+    )
 
 
 def test_should_build_video_cleaned_output_path(tmp_path: Path) -> None:

@@ -299,7 +299,7 @@ export const useMediaController = () => {
   const startCut = async (
     videoPath: string,
     ranges: CutRange[],
-    compressionPreset: CompressionPreset = "max_compression",
+    compressionPreset: CompressionPreset = "apple_silicon",
   ) => {
     try {
       await taskEventsReadyRef.current?.promise;

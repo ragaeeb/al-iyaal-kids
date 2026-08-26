@@ -3,11 +3,13 @@ set -euo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 TAURI_CONFIG_PATH="$ROOT_DIR/src-tauri/tauri.conf.json"
-BUILD_DIR="$ROOT_DIR/src-tauri/target/release/bundle"
+MACOS_TARGET="${AIYAAL_MACOS_TARGET:-aarch64-apple-darwin}"
+BUILD_DIR="$ROOT_DIR/src-tauri/target/$MACOS_TARGET/release/bundle"
 SETUP_NOTARY_SCRIPT="$ROOT_DIR/scripts/setup-notary.sh"
 RUN_ID="$(date +%Y%m%d-%H%M%S)"
 LOG_DIR="$ROOT_DIR/.logs/sign-notarize/$RUN_ID"
-mkdir -p "$LOG_DIR"
+PREFLIGHT_ONLY=false
+PROFILE_OVERRIDE=""
 
 log() {
   printf '\n[%s] %s\n' "$(date +%H:%M:%S)" "$*"
@@ -16,6 +18,43 @@ log() {
 fail() {
   printf '\n[ERROR] %s\n' "$*" >&2
   exit 1
+}
+
+usage() {
+  cat <<'EOF'
+Usage: bun run release:macos [--preflight] [--profile NAME]
+
+Options:
+  --preflight     Validate signing identity, Team ID, and Keychain profile only.
+  --profile NAME  Override the notarytool Keychain profile name.
+  -h, --help      Show this help.
+
+The default Keychain profile is al-iyaal-kids-notary. Environment overrides:
+APPLE_SIGNING_IDENTITY, APPLE_TEAM_ID, APPLE_NOTARY_PROFILE, and AIYAAL_MACOS_TARGET.
+EOF
+}
+
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --preflight)
+        PREFLIGHT_ONLY=true
+        shift
+        ;;
+      --profile)
+        [[ $# -ge 2 && -n "$2" ]] || fail "--profile requires a profile name."
+        PROFILE_OVERRIDE="$2"
+        shift 2
+        ;;
+      -h | --help)
+        usage
+        exit 0
+        ;;
+      *)
+        fail "Unknown argument: $1"
+        ;;
+    esac
+  done
 }
 
 require_cmd() {
@@ -75,6 +114,15 @@ PY
 validate_notary_profile() {
   local profile_name="$1"
   local team_id="$2"
+  if [[ -z "$LOG_DIR" ]]; then
+    xcrun notarytool history \
+      --keychain-profile "$profile_name" \
+      --team-id "$team_id" \
+      --output-format json \
+      >/dev/null 2>&1
+    return
+  fi
+
   xcrun notarytool history \
     --keychain-profile "$profile_name" \
     --team-id "$team_id" \
@@ -84,10 +132,10 @@ validate_notary_profile() {
 
 build_signed_dmg() {
   local identity="$1"
-  log "Building signed DMG using signing identity: $identity"
+  log "Building signed $MACOS_TARGET DMG using signing identity: $identity"
   (
     cd "$ROOT_DIR"
-    APPLE_SIGNING_IDENTITY="$identity" bun run tauri:build -- --bundles dmg
+    APPLE_SIGNING_IDENTITY="$identity" bun run tauri:build -- --target "$MACOS_TARGET" --bundles dmg
   ) 2>&1 | tee "$LOG_DIR/build.log"
 }
 
@@ -170,21 +218,34 @@ staple_dmg() {
 }
 
 main() {
+  parse_args "$@"
+
   [[ "$(uname -s)" == "Darwin" ]] || fail "This script must be run on macOS."
 
-  require_cmd bun
-  require_cmd codesign
-  require_cmd hdiutil
   require_cmd python3
   require_cmd security
-  require_cmd spctl
   require_cmd xcrun
+
+  if [[ "$PREFLIGHT_ONLY" == false ]]; then
+    require_cmd bun
+    require_cmd codesign
+    require_cmd hdiutil
+    require_cmd shasum
+    require_cmd spctl
+    mkdir -p "$LOG_DIR"
+  else
+    LOG_DIR=""
+  fi
 
   local app_name
   app_name="$(product_name)"
 
-  log "Preparing local signing and notarization for $app_name"
-  log "Logs will be written to $LOG_DIR"
+  if [[ "$PREFLIGHT_ONLY" == true ]]; then
+    log "Checking local signing and notarization readiness for $app_name"
+  else
+    log "Preparing local signing and notarization for $app_name"
+    log "Logs will be written to $LOG_DIR"
+  fi
 
   load_identities
   [[ ${#IDENTITIES[@]} -gt 0 ]] || fail "No Developer ID Application identities were found in the login keychain."
@@ -217,22 +278,24 @@ main() {
   log "Selected signing identity: $selected_identity"
   log "Derived Team ID: $team_id"
 
-  local default_profile="${AIYAAL_NOTARY_PROFILE:-al-iyaal-kids-notary}"
-  local notary_profile="${APPLE_NOTARY_PROFILE:-$default_profile}"
-  printf 'Notary keychain profile [%s]: ' "$notary_profile"
-  read -r profile_input || true
-  if [[ -n "${profile_input:-}" ]]; then
-    notary_profile="$profile_input"
-  fi
+  local notary_profile="${PROFILE_OVERRIDE:-${APPLE_NOTARY_PROFILE:-${AIYAAL_NOTARY_PROFILE:-al-iyaal-kids-notary}}}"
 
-  log "Validating notarytool keychain profile: $notary_profile"
+  log "Notary profile: $notary_profile"
+  log "Validating notarytool Keychain access"
   if ! validate_notary_profile "$notary_profile" "$team_id"; then
-    if [[ -t 0 ]]; then
+    if [[ "$PREFLIGHT_ONLY" == true ]]; then
+      fail "No usable notarytool profile named '$notary_profile'. Run $SETUP_NOTARY_SCRIPT $notary_profile interactively."
+    elif [[ -t 0 ]]; then
       "$SETUP_NOTARY_SCRIPT" "$notary_profile"
       validate_notary_profile "$notary_profile" "$team_id" || fail "The notarytool keychain profile '$notary_profile' is still not usable after credential setup."
     else
       fail "No usable notarytool profile named '$notary_profile'. Run $SETUP_NOTARY_SCRIPT $notary_profile interactively first."
     fi
+  fi
+
+  if [[ "$PREFLIGHT_ONLY" == true ]]; then
+    log "Release preflight completed successfully. No build or notarization submission was performed."
+    return
   fi
 
   build_signed_dmg "$selected_identity"
@@ -266,9 +329,17 @@ main() {
 
   staple_dmg "$dmg_path" "$app_path"
 
+  local checksum_path="$dmg_path.sha256"
+  (
+    cd "$(dirname "$dmg_path")"
+    shasum -a 256 "$(basename "$dmg_path")" >"$(basename "$checksum_path")"
+    shasum -a 256 -c "$(basename "$checksum_path")"
+  ) | tee "$LOG_DIR/checksum.log"
+
   log "Signing and notarization completed successfully."
   log "Submission ID: $submission_id"
   log "Final DMG: $dmg_path"
+  log "SHA-256: $checksum_path"
   log "Logs: $LOG_DIR"
 }
 

@@ -16,6 +16,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DrawerClose } from "@/components/ui/drawer";
 import { trashFile } from "@/features/batch/transport";
 import { parseSavedCutRanges } from "@/features/editor/ranges";
+import { clampSeekTime } from "@/features/editor/seek";
 import { findSubtitleAtTime, formatTime, parseSrt } from "@/features/editor/subtitles";
 import { canResetVideoToOriginal } from "@/features/editor/video-reset";
 import {
@@ -207,12 +208,6 @@ const applyLoadedSidecars = (
   } else {
     setAnalysisSidecar(null);
   }
-};
-
-const clampSeekTime = (time: number, duration: number) => {
-  const upperBound =
-    Number.isFinite(duration) && duration > 0 ? duration : Number.POSITIVE_INFINITY;
-  return Math.max(0, Math.min(time, upperBound));
 };
 
 type DeleteVideoConfirmationCardProps = {
@@ -682,7 +677,9 @@ type VideoControlsProps = {
   hoverTime: number | null;
   isPlaying: boolean;
   onSeek: (time: number) => void;
+  onSeekBackwardFive: () => void;
   onSeekBackwardTen: () => void;
+  onSeekForwardFive: () => void;
   onSeekForwardTen: () => void;
   onSeekHover: (time: number, position: number) => void;
   onSeekHoverEnd: () => void;
@@ -696,7 +693,9 @@ const VideoControls = ({
   hoverTime,
   isPlaying,
   onSeek,
+  onSeekBackwardFive,
   onSeekBackwardTen,
+  onSeekForwardFive,
   onSeekForwardTen,
   onSeekHover,
   onSeekHoverEnd,
@@ -715,6 +714,14 @@ const VideoControls = ({
         </button>
         <button
           type="button"
+          onClick={onSeekBackwardFive}
+          className="flex h-8 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/10 px-2.5 font-semibold text-[11px] transition hover:bg-white/18"
+          aria-label="Seek backward 5 seconds"
+        >
+          -5s
+        </button>
+        <button
+          type="button"
           onClick={onTogglePlayback}
           className="flex size-8 shrink-0 items-center justify-center rounded-full bg-white/10 transition hover:bg-white/18"
           aria-label={isPlaying ? "Pause video" : "Play video"}
@@ -724,6 +731,14 @@ const VideoControls = ({
           ) : (
             <Play className="ml-0.5 size-3.5 fill-current" />
           )}
+        </button>
+        <button
+          type="button"
+          onClick={onSeekForwardFive}
+          className="flex h-8 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/10 px-2.5 font-semibold text-[11px] transition hover:bg-white/18"
+          aria-label="Seek forward 5 seconds"
+        >
+          +5s
         </button>
         <button
           type="button"
@@ -1087,7 +1102,9 @@ const useEditorActions = ({
     [duration, setCurrentTime, videoRef],
   );
 
+  const seekBackwardFive = useCallback(() => seekTo(currentTime - 5), [currentTime, seekTo]);
   const seekBackwardTen = useCallback(() => seekTo(currentTime - 10), [currentTime, seekTo]);
+  const seekForwardFive = useCallback(() => seekTo(currentTime + 5), [currentTime, seekTo]);
   const seekForwardTen = useCallback(() => seekTo(currentTime + 10), [currentTime, seekTo]);
 
   const openDeleteConfirmation = useCallback(() => {
@@ -1182,7 +1199,9 @@ const useEditorActions = ({
     resetMarking,
     resetToOriginalVideo,
     saveSelectedRanges,
+    seekBackwardFive,
     seekBackwardTen,
+    seekForwardFive,
     seekForwardTen,
     seekTo,
     startCutExport,
@@ -1258,7 +1277,9 @@ type EditorPanelViewProps = {
   onRetryAnalysisSettings: () => void;
   onSaveRanges: () => void;
   onSeek: (time: number) => void;
+  onSeekBackwardFive: () => void;
   onSeekBackwardTen: () => void;
+  onSeekForwardFive: () => void;
   onSeekForwardTen: () => void;
   onSeekHover: (time: number, position: number) => void;
   onSeekHoverEnd: () => void;
@@ -1439,7 +1460,9 @@ type EditorPreviewProps = Pick<
   | "hoverSeekTime"
   | "isPlaying"
   | "onSeek"
+  | "onSeekBackwardFive"
   | "onSeekBackwardTen"
+  | "onSeekForwardFive"
   | "onSeekForwardTen"
   | "onSeekHover"
   | "onSeekHoverEnd"
@@ -1465,7 +1488,9 @@ const EditorPreview = ({
   hoverSeekTime,
   isPlaying,
   onSeek,
+  onSeekBackwardFive,
   onSeekBackwardTen,
+  onSeekForwardFive,
   onSeekForwardTen,
   onSeekHover,
   onSeekHoverEnd,
@@ -1528,7 +1553,9 @@ const EditorPreview = ({
           hoverTime={hoverSeekTime}
           isPlaying={isPlaying}
           onSeek={onSeek}
+          onSeekBackwardFive={onSeekBackwardFive}
           onSeekBackwardTen={onSeekBackwardTen}
+          onSeekForwardFive={onSeekForwardFive}
           onSeekForwardTen={onSeekForwardTen}
           onSeekHover={onSeekHover}
           onSeekHoverEnd={onSeekHoverEnd}
@@ -1900,7 +1927,9 @@ const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProp
     resetMarking,
     resetToOriginalVideo,
     saveSelectedRanges,
+    seekBackwardFive,
     seekBackwardTen,
+    seekForwardFive,
     seekForwardTen,
     seekTo,
     startCutExport,
@@ -2019,7 +2048,9 @@ const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProp
       onRetryAnalysisSettings={() => void loadAnalysisRunSettings()}
       onSaveRanges={saveSelectedRanges}
       onSeek={seekTo}
+      onSeekBackwardFive={seekBackwardFive}
       onSeekBackwardTen={seekBackwardTen}
+      onSeekForwardFive={seekForwardFive}
       onSeekForwardTen={seekForwardTen}
       onSeekHover={updateSeekHover}
       onSeekHoverEnd={clearSeekHover}
@@ -2116,7 +2147,9 @@ const EditorPanelView = ({
   onRetryAnalysisSettings,
   onSaveRanges,
   onSeek,
+  onSeekBackwardFive,
   onSeekBackwardTen,
+  onSeekForwardFive,
   onSeekForwardTen,
   onSeekHover,
   onSeekHoverEnd,
@@ -2273,7 +2306,9 @@ const EditorPanelView = ({
           hoverSeekTime={hoverSeekTime}
           isPlaying={isPlaying}
           onSeek={onSeek}
+          onSeekBackwardFive={onSeekBackwardFive}
           onSeekBackwardTen={onSeekBackwardTen}
+          onSeekForwardFive={onSeekForwardFive}
           onSeekForwardTen={onSeekForwardTen}
           onSeekHover={onSeekHover}
           onSeekHoverEnd={onSeekHoverEnd}

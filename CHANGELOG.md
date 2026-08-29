@@ -1,3 +1,10 @@
+# [1.4.0](https://github.com/ragaeeb/al-iyaal-kids/compare/v1.3.0...v1.4.0) (2026-08-29)
+
+
+### Features
+
+* **scrub:** Improve video export performance, add 5 second seek, flagged sections in scrubber ([#24](https://github.com/ragaeeb/al-iyaal-kids/issues/24)) ([eee14e3](https://github.com/ragaeeb/al-iyaal-kids/commit/eee14e35e1ebb932b29a89440fb9e98107e42a8d))
+
 # [1.3.0](https://github.com/ragaeeb/al-iyaal-kids/compare/v1.2.0...v1.3.0) (2026-08-15)
 
 

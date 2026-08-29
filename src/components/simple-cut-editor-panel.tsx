@@ -15,7 +15,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DrawerClose } from "@/components/ui/drawer";
 import { trashFile } from "@/features/batch/transport";
-import { parseSavedCutRanges } from "@/features/editor/ranges";
+import { parseSavedCutRanges, toFlaggedTimelineRanges } from "@/features/editor/ranges";
+import { clampSeekTime } from "@/features/editor/seek";
 import { findSubtitleAtTime, formatTime, parseSrt } from "@/features/editor/subtitles";
 import { canResetVideoToOriginal } from "@/features/editor/video-reset";
 import {
@@ -24,7 +25,11 @@ import {
   toCutRangesSidecarPath,
   toSrtSidecarPath,
 } from "@/features/editor/video-sidecars";
-import { getLatestTaskForInput, getTaskOutputPath } from "@/features/media/selectors";
+import {
+  getLatestTaskForInput,
+  getTaskOutputPath,
+  isFlagTaskActive as isFlagTaskActiveSelector,
+} from "@/features/media/selectors";
 import {
   getMediaPreviewUrl,
   readAnalysisImportFile,
@@ -207,12 +212,6 @@ const applyLoadedSidecars = (
   } else {
     setAnalysisSidecar(null);
   }
-};
-
-const clampSeekTime = (time: number, duration: number) => {
-  const upperBound =
-    Number.isFinite(duration) && duration > 0 ? duration : Number.POSITIVE_INFINITY;
-  return Math.max(0, Math.min(time, upperBound));
 };
 
 type DeleteVideoConfirmationCardProps = {
@@ -678,30 +677,50 @@ const SubtitleOverlay = ({
 type VideoControlsProps = {
   currentTime: number;
   duration: number;
+  flaggedSegments: AnalysisSidecar["flagged"];
   hoverPosition: number | null;
   hoverTime: number | null;
   isPlaying: boolean;
   onSeek: (time: number) => void;
+  onSeekBackwardFive: () => void;
   onSeekBackwardTen: () => void;
+  onSeekForwardFive: () => void;
   onSeekForwardTen: () => void;
   onSeekHover: (time: number, position: number) => void;
   onSeekHoverEnd: () => void;
   onTogglePlayback: () => void;
+  subtitles: SubtitleEntry[];
 };
+
+const flaggedRangeColors = {
+  high: "bg-red-500",
+  low: "bg-yellow-300",
+  medium: "bg-orange-400",
+} as const;
 
 const VideoControls = ({
   currentTime,
   duration,
+  flaggedSegments,
   hoverPosition,
   hoverTime,
   isPlaying,
   onSeek,
+  onSeekBackwardFive,
   onSeekBackwardTen,
+  onSeekForwardFive,
   onSeekForwardTen,
   onSeekHover,
   onSeekHoverEnd,
   onTogglePlayback,
+  subtitles,
 }: VideoControlsProps) => {
+  const flaggedRanges = toFlaggedTimelineRanges(flaggedSegments, subtitles, duration);
+  const hoveredFlag =
+    hoverTime === null
+      ? undefined
+      : flaggedRanges.find((range) => range.startTime <= hoverTime && hoverTime <= range.endTime);
+
   return (
     <div className="absolute inset-x-0 bottom-0 p-3">
       <div className="flex items-center gap-2 rounded-[18px] border border-white/12 bg-black/45 px-3 py-2 text-white shadow-[0_10px_30px_rgba(0,0,0,0.38)] backdrop-blur-md">
@@ -712,6 +731,14 @@ const VideoControls = ({
           aria-label="Seek backward 10 seconds"
         >
           -10s
+        </button>
+        <button
+          type="button"
+          onClick={onSeekBackwardFive}
+          className="flex h-8 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/10 px-2.5 font-semibold text-[11px] transition hover:bg-white/18"
+          aria-label="Seek backward 5 seconds"
+        >
+          -5s
         </button>
         <button
           type="button"
@@ -727,6 +754,14 @@ const VideoControls = ({
         </button>
         <button
           type="button"
+          onClick={onSeekForwardFive}
+          className="flex h-8 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/10 px-2.5 font-semibold text-[11px] transition hover:bg-white/18"
+          aria-label="Seek forward 5 seconds"
+        >
+          +5s
+        </button>
+        <button
+          type="button"
           onClick={onSeekForwardTen}
           className="flex h-8 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/10 px-2.5 font-semibold text-[11px] transition hover:bg-white/18"
           aria-label="Seek forward 10 seconds"
@@ -739,12 +774,37 @@ const VideoControls = ({
         <div className="relative min-w-0 flex-1">
           {hoverTime !== null && hoverPosition !== null ? (
             <div
-              className="pointer-events-none absolute bottom-full mb-2 -translate-x-1/2 rounded-full border border-white/15 bg-black/80 px-2 py-1 font-mono text-[10px] text-white shadow-[0_8px_20px_rgba(0,0,0,0.3)]"
+              className="pointer-events-none absolute bottom-full z-20 mb-2 max-w-72 -translate-x-1/2 rounded-lg border border-white/15 bg-black/85 px-2.5 py-1.5 text-[10px] text-white shadow-[0_8px_20px_rgba(0,0,0,0.3)]"
               style={{ left: `${hoverPosition}%` }}
             >
-              {formatTime(hoverTime, duration)}
+              <div className="flex items-center gap-1.5 font-mono">
+                <span>{formatTime(hoverTime, duration)}</span>
+                {hoveredFlag ? (
+                  <span className="font-semibold uppercase">{hoveredFlag.priority}</span>
+                ) : null}
+              </div>
+              {hoveredFlag ? (
+                <p className="mt-1 line-clamp-3 text-left text-white/90 leading-4">
+                  {hoveredFlag.text}
+                </p>
+              ) : null}
             </div>
           ) : null}
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-x-0 top-1/2 h-2 -translate-y-1/2 overflow-hidden rounded-full bg-white/20"
+          >
+            {flaggedRanges.map((range) => (
+              <span
+                key={`${range.startTime}-${range.endTime}-${range.priority}-${range.ruleId}-${range.text}`}
+                className={`absolute inset-y-0 ${flaggedRangeColors[range.priority]}`}
+                style={{
+                  left: `${(range.startTime / duration) * 100}%`,
+                  width: `${Math.max(((range.endTime - range.startTime) / duration) * 100, 0.35)}%`,
+                }}
+              />
+            ))}
+          </div>
           <input
             type="range"
             min={0}
@@ -761,7 +821,7 @@ const VideoControls = ({
               const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
               onSeekHover(clampSeekTime(duration * ratio, duration), ratio * 100);
             }}
-            className="h-2 w-full cursor-pointer appearance-none rounded-full bg-white/20 accent-white"
+            className="relative z-10 h-2 w-full cursor-pointer appearance-none rounded-full bg-transparent accent-white"
             aria-label="Seek video"
           />
         </div>
@@ -1087,7 +1147,9 @@ const useEditorActions = ({
     [duration, setCurrentTime, videoRef],
   );
 
+  const seekBackwardFive = useCallback(() => seekTo(currentTime - 5), [currentTime, seekTo]);
   const seekBackwardTen = useCallback(() => seekTo(currentTime - 10), [currentTime, seekTo]);
+  const seekForwardFive = useCallback(() => seekTo(currentTime + 5), [currentTime, seekTo]);
   const seekForwardTen = useCallback(() => seekTo(currentTime + 10), [currentTime, seekTo]);
 
   const openDeleteConfirmation = useCallback(() => {
@@ -1182,7 +1244,9 @@ const useEditorActions = ({
     resetMarking,
     resetToOriginalVideo,
     saveSelectedRanges,
+    seekBackwardFive,
     seekBackwardTen,
+    seekForwardFive,
     seekForwardTen,
     seekTo,
     startCutExport,
@@ -1222,6 +1286,7 @@ type EditorPanelViewProps = {
   flaggedSectionsFilter: FlaggedSectionsFilter;
   flagError: string | null;
   flagTask: TaskState | undefined;
+  isFlagTaskActive: boolean;
   handleVideoError: () => void;
   hasStartedMarking: boolean;
   hasSubtitleSidecar: boolean;
@@ -1258,7 +1323,9 @@ type EditorPanelViewProps = {
   onRetryAnalysisSettings: () => void;
   onSaveRanges: () => void;
   onSeek: (time: number) => void;
+  onSeekBackwardFive: () => void;
   onSeekBackwardTen: () => void;
+  onSeekForwardFive: () => void;
   onSeekForwardTen: () => void;
   onSeekHover: (time: number, position: number) => void;
   onSeekHoverEnd: () => void;
@@ -1386,8 +1453,9 @@ const EditorToolbar = ({
         disabled={isCutTaskActive}
         className="h-8 rounded-[14px] border border-[#d9b7a5] bg-white px-2 text-[#4f1f1a] text-xs outline-none transition focus:border-[#88322d] focus:ring-[#c57267]/25 focus:ring-[2px] disabled:opacity-50"
       >
-        <option value="max_compression">Max compression (HEVC)</option>
-        <option value="balanced">Balanced (H.264)</option>
+        <option value="apple_silicon">Fast high quality (Apple HEVC)</option>
+        <option value="max_compression">Smallest file (slow HEVC)</option>
+        <option value="balanced">Compatibility (slow H.264)</option>
       </select>
     </label>
     <Button
@@ -1429,6 +1497,7 @@ const EditorToolbar = ({
 
 type EditorPreviewProps = Pick<
   EditorPanelViewProps,
+  | "analysisSidecar"
   | "currentSubtitle"
   | "currentTime"
   | "duration"
@@ -1438,7 +1507,9 @@ type EditorPreviewProps = Pick<
   | "hoverSeekTime"
   | "isPlaying"
   | "onSeek"
+  | "onSeekBackwardFive"
   | "onSeekBackwardTen"
+  | "onSeekForwardFive"
   | "onSeekForwardTen"
   | "onSeekHover"
   | "onSeekHoverEnd"
@@ -1449,12 +1520,14 @@ type EditorPreviewProps = Pick<
   | "onVideoPause"
   | "onVideoPlay"
   | "playbackError"
+  | "subtitles"
   | "videoPath"
   | "videoRef"
   | "videoSrc"
 >;
 
 const EditorPreview = ({
+  analysisSidecar,
   currentSubtitle,
   currentTime,
   duration,
@@ -1464,7 +1537,9 @@ const EditorPreview = ({
   hoverSeekTime,
   isPlaying,
   onSeek,
+  onSeekBackwardFive,
   onSeekBackwardTen,
+  onSeekForwardFive,
   onSeekForwardTen,
   onSeekHover,
   onSeekHoverEnd,
@@ -1475,6 +1550,7 @@ const EditorPreview = ({
   onVideoPause,
   onVideoPlay,
   playbackError,
+  subtitles,
   videoPath,
   videoRef,
   videoSrc,
@@ -1523,15 +1599,19 @@ const EditorPreview = ({
         <VideoControls
           currentTime={currentTime}
           duration={duration}
+          flaggedSegments={analysisSidecar?.flagged ?? []}
           hoverPosition={hoverSeekPosition}
           hoverTime={hoverSeekTime}
           isPlaying={isPlaying}
           onSeek={onSeek}
+          onSeekBackwardFive={onSeekBackwardFive}
           onSeekBackwardTen={onSeekBackwardTen}
+          onSeekForwardFive={onSeekForwardFive}
           onSeekForwardTen={onSeekForwardTen}
           onSeekHover={onSeekHover}
           onSeekHoverEnd={onSeekHoverEnd}
           onTogglePlayback={onTogglePlayback}
+          subtitles={subtitles}
         />
       ) : null}
     </div>
@@ -1559,7 +1639,7 @@ const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProp
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
   const [isDeletingVideo, setIsDeletingVideo] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [compressionPreset, setCompressionPreset] = useState<CompressionPreset>("max_compression");
+  const [compressionPreset, setCompressionPreset] = useState<CompressionPreset>("apple_silicon");
   const [isDropTargetActive, setIsDropTargetActive] = useState(false);
   const [sidecarRefreshKey, setSidecarRefreshKey] = useState(0);
   const [subtitles, setSubtitles] = useState<SubtitleEntry[]>([]);
@@ -1575,6 +1655,7 @@ const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProp
   const [analysisImportMessage, setAnalysisImportMessage] = useState<string | null>(null);
   const [analysisImportHasWarnings, setAnalysisImportHasWarnings] = useState(false);
   const [isImportingAnalysis, setIsImportingAnalysis] = useState(false);
+  const [isStartingAnalysis, setIsStartingAnalysis] = useState(false);
   const [isFlaggedSectionsOpen, setIsFlaggedSectionsOpen] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const dropTargetRef = useRef<HTMLDivElement>(null);
@@ -1591,7 +1672,7 @@ const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProp
     selectedVideoPath,
     videoPath,
   );
-  const isFlagTaskActive = flagTask?.status === "queued" || flagTask?.status === "running";
+  const isFlagTaskActive = isFlagTaskActiveSelector(isStartingAnalysis, flagTask);
   const cutOutputPath = getTaskOutputPath(cutTask);
   const currentSubtitle = findSubtitleAtTime(subtitles, currentTime);
   const isCutTaskActive =
@@ -1899,7 +1980,9 @@ const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProp
     resetMarking,
     resetToOriginalVideo,
     saveSelectedRanges,
+    seekBackwardFive,
     seekBackwardTen,
+    seekForwardFive,
     seekForwardTen,
     seekTo,
     startCutExport,
@@ -1941,6 +2024,15 @@ const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProp
     videoRef,
   });
 
+  const startAnalysis = useCallback(async () => {
+    setIsStartingAnalysis(true);
+    try {
+      await startFlaggedSectionAnalysis();
+    } finally {
+      setIsStartingAnalysis(false);
+    }
+  }, [startFlaggedSectionAnalysis]);
+
   return (
     <EditorPanelView
       analysisImportError={analysisImportError}
@@ -1977,6 +2069,7 @@ const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProp
       flaggedSectionsBodyRef={flaggedSectionsBodyRef}
       flaggedSectionsFilter={flaggedSectionsFilter}
       flagTask={flagTask}
+      isFlagTaskActive={isFlagTaskActive}
       flagError={getTaskStartError(
         controller.state.errorTaskKind,
         controller.state.errorMessage,
@@ -2018,12 +2111,14 @@ const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProp
       onRetryAnalysisSettings={() => void loadAnalysisRunSettings()}
       onSaveRanges={saveSelectedRanges}
       onSeek={seekTo}
+      onSeekBackwardFive={seekBackwardFive}
       onSeekBackwardTen={seekBackwardTen}
+      onSeekForwardFive={seekForwardFive}
       onSeekForwardTen={seekForwardTen}
       onSeekHover={updateSeekHover}
       onSeekHoverEnd={clearSeekHover}
       onSetCompressionPreset={setCompressionPreset}
-      onStartAnalysis={startFlaggedSectionAnalysis}
+      onStartAnalysis={startAnalysis}
       onStartCutExport={startCutExport}
       onStartMark={markStart}
       onStartSubtitleGeneration={startSubtitleGeneration}
@@ -2079,6 +2174,7 @@ const EditorPanelView = ({
   flaggedSectionsFilter,
   flagError,
   flagTask,
+  isFlagTaskActive,
   handleVideoError,
   hasStartedMarking,
   hasSubtitleSidecar,
@@ -2115,7 +2211,9 @@ const EditorPanelView = ({
   onRetryAnalysisSettings,
   onSaveRanges,
   onSeek,
+  onSeekBackwardFive,
   onSeekBackwardTen,
+  onSeekForwardFive,
   onSeekForwardTen,
   onSeekHover,
   onSeekHoverEnd,
@@ -2213,6 +2311,7 @@ const EditorPanelView = ({
           filter={flaggedSectionsFilter}
           flagError={flagError}
           flagTask={flagTask}
+          isFlagTaskActive={isFlagTaskActive}
           isLoadingAnalysisSettings={isLoadingAnalysisSettings}
           isAnalysisImportActive={isAnalysisImportActive}
           isImportingAnalysis={isImportingAnalysis}
@@ -2263,6 +2362,7 @@ const EditorPanelView = ({
         ) : null}
 
         <EditorPreview
+          analysisSidecar={analysisSidecar}
           currentSubtitle={currentSubtitle}
           currentTime={currentTime}
           duration={duration}
@@ -2272,7 +2372,9 @@ const EditorPanelView = ({
           hoverSeekTime={hoverSeekTime}
           isPlaying={isPlaying}
           onSeek={onSeek}
+          onSeekBackwardFive={onSeekBackwardFive}
           onSeekBackwardTen={onSeekBackwardTen}
+          onSeekForwardFive={onSeekForwardFive}
           onSeekForwardTen={onSeekForwardTen}
           onSeekHover={onSeekHover}
           onSeekHoverEnd={onSeekHoverEnd}
@@ -2283,6 +2385,7 @@ const EditorPanelView = ({
           onVideoPause={onVideoPause}
           onVideoPlay={onVideoPlay}
           playbackError={playbackError}
+          subtitles={subtitles}
           videoPath={videoPath}
           videoRef={videoRef}
           videoSrc={videoSrc}

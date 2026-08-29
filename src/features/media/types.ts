@@ -56,7 +56,7 @@ export type CutRange = {
   end: string;
 };
 
-export type CompressionPreset = "max_compression" | "balanced";
+export type CompressionPreset = "apple_silicon" | "max_compression" | "balanced";
 
 export type StartCutJobRequest = {
   videoPath: string;

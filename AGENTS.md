@@ -96,7 +96,8 @@ Do not describe the app as fully offline: subtitle moderation can use opt-in clo
 bun run dev
 bun run web:dev
 bun run check
-bun run sign:macos
+bun run release:macos:preflight
+bun run release:macos
 ./scripts/setup-notary.sh
 cargo test --manifest-path src-tauri/Cargo.toml
 PYTHONPATH=python-worker/src uv run --project python-worker --extra dev python -m pytest python-worker/tests

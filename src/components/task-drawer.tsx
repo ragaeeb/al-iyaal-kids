@@ -51,7 +51,12 @@ const TaskDrawer = ({
         {triggerLabel}
       </Button>
       {open ? (
-        <Drawer open={open} modal={modal} onOpenChange={updateOpen}>
+        <Drawer
+          open={open}
+          modal={modal}
+          disablePointerDismissal={!modal}
+          onOpenChange={updateOpen}
+        >
           <DrawerPopup showOverlay={modal}>
             <div className="flex min-h-0 flex-1 flex-col">
               <div className="flex items-start justify-between gap-1.5">

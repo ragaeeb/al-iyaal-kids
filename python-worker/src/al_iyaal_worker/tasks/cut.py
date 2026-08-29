@@ -7,10 +7,9 @@ import subprocess
 import tempfile
 
 from ..commands import (
-    build_ffmpeg_concat_command,
-    build_ffmpeg_slice_command,
+    build_ffmpeg_cut_command,
     build_video_cleaned_output_path,
-    generate_concat_file_content,
+    generate_cut_concat_file_content,
 )
 from ..filesystem import to_job_id
 from ..models import CutRange, StartCutJobCommand
@@ -38,11 +37,12 @@ def _ffmpeg_progress_seconds(line: str) -> float | None:
         return None
 
 
-def _run_ffmpeg_slice_with_progress(
+def _run_ffmpeg_with_progress(
     command: list[str],
     duration_seconds: float,
     on_progress: Callable[[float], None],
-) -> subprocess.CompletedProcess[str]:
+    should_cancel: ShouldCancel,
+) -> tuple[subprocess.CompletedProcess[str], bool]:
     process = subprocess.Popen(  # noqa: S603
         command,
         stdout=subprocess.PIPE,
@@ -58,18 +58,40 @@ def _run_ffmpeg_slice_with_progress(
             1,
             "",
             "ffmpeg progress stream unavailable",
-        )
+        ), False
 
     recent_output: deque[str] = deque(maxlen=100)
+    cancelled = False
+
+    def terminate_process() -> None:
+        try:
+            process.terminate()
+        except (OSError, ProcessLookupError):
+            pass
+
+    if should_cancel():
+        cancelled = True
+        terminate_process()
+
     for line in stdout_pipe:
         recent_output.append(line)
+        if cancelled:
+            continue
+        if should_cancel():
+            cancelled = True
+            terminate_process()
+            continue
         progress_seconds = _ffmpeg_progress_seconds(line)
         if progress_seconds is not None:
             on_progress(min(1.0, progress_seconds / duration_seconds))
 
+    if not cancelled and should_cancel():
+        cancelled = True
+        terminate_process()
+
     return_code = process.wait()
     output = "".join(recent_output)
-    return subprocess.CompletedProcess(command, return_code, "", output)
+    return subprocess.CompletedProcess(command, return_code, "", output), cancelled
 
 
 def _is_valid_range(cut_range: CutRange) -> bool:
@@ -136,90 +158,51 @@ def process_cut_job(
     try:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         temp_dir = Path(tempfile.mkdtemp(prefix="al-iyaal-cut-"))
-        slice_paths: list[Path] = []
-        total_ranges = len(command.ranges)
+        range_seconds = [_to_seconds(cut_range) for cut_range in command.ranges]
+        total_duration = sum(end - start for start, end in range_seconds)
+        concat_file = temp_dir / "ranges.ffconcat"
+        concat_file.write_text(
+            generate_cut_concat_file_content(video_path, range_seconds),
+            encoding="utf-8",
+        )
         max_progress = 5
-        for index, cut_range in enumerate(command.ranges):
-            if should_cancel():
-                emit_task_done(emit, task_id, "cut", ok=0, failed=0, cancelled=1)
-                return
-
-            start, end = _to_seconds(cut_range)
-            duration = end - start
-            slice_path = temp_dir / f"slice-{index}.mp4"
-
-            slice_command = build_ffmpeg_slice_command(
+        with staged_output_path(output_path) as staged_output_path_value:
+            cut_command = build_ffmpeg_cut_command(
                 ffmpeg_path=ffmpeg_path,
-                video_path=video_path,
-                output_path=slice_path,
-                start_seconds=start,
-                duration_seconds=duration,
+                concat_file_path=concat_file,
+                output_path=staged_output_path_value,
                 compression_preset=command.compression_preset,
             )
 
-            def emit_slice_progress(ratio: float) -> None:
+            def emit_cut_progress(ratio: float) -> None:
                 nonlocal max_progress
-                progress = 5 + int(((index + ratio) / total_ranges) * 75)
+                progress = 5 + int(ratio * 90)
                 if progress > max_progress:
                     max_progress = progress
                     emit_task_job_progress(emit, task_id, "cut", job_id, progress)
 
-            slice_result = _run_ffmpeg_slice_with_progress(
-                slice_command,
-                duration,
-                emit_slice_progress,
+            cut_result, cancelled = _run_ffmpeg_with_progress(
+                cut_command,
+                total_duration,
+                emit_cut_progress,
+                should_cancel,
             )
-            if slice_result.returncode != 0:
+            if cancelled or should_cancel():
+                emit_task_done(emit, task_id, "cut", ok=0, failed=0, cancelled=1)
+                return
+            if cut_result.returncode != 0:
                 emit_task_job_error(
                     emit,
                     task_id,
                     "cut",
                     job_id,
-                    f"ffmpeg slice failed: {slice_result.stderr.strip() or f'exit {slice_result.returncode}'}",
+                    f"ffmpeg cut failed: {cut_result.stderr.strip() or f'exit {cut_result.returncode}'}",
                 )
                 emit_task_done(emit, task_id, "cut", ok=0, failed=1, cancelled=0)
                 return
 
-            slice_paths.append(slice_path)
-            progress = 5 + int(((index + 1) / total_ranges) * 75)
-            if progress > max_progress:
-                max_progress = progress
-                emit_task_job_progress(emit, task_id, "cut", job_id, progress)
-
-        with staged_output_path(output_path) as staged_output_path_value:
-            if len(slice_paths) == 1:
-                shutil.move(str(slice_paths[0]), str(staged_output_path_value))
-            else:
-                concat_file = temp_dir / "concat.txt"
-                concat_file.write_text(
-                    generate_concat_file_content(slice_paths),
-                    encoding="utf-8",
-                )
-
-                concat_command = build_ffmpeg_concat_command(
-                    ffmpeg_path=ffmpeg_path,
-                    concat_file_path=concat_file,
-                    output_path=staged_output_path_value,
-                )
-                concat_result = subprocess.run(  # noqa: S603
-                    concat_command,
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                )
-                if concat_result.returncode != 0:
-                    emit_task_job_error(
-                        emit,
-                        task_id,
-                        "cut",
-                        job_id,
-                        f"ffmpeg concat failed: {concat_result.stderr.strip() or f'exit {concat_result.returncode}'}",
-                    )
-                    emit_task_done(emit, task_id, "cut", ok=0, failed=1, cancelled=0)
-                    return
-
+            if max_progress < 95:
                 emit_task_job_progress(emit, task_id, "cut", job_id, 95)
-
             commit_staged_output(staged_output_path_value, output_path)
 
         emit_job_log(

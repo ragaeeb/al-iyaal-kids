@@ -34,6 +34,7 @@ type FlaggedSectionsDrawerContentProps = {
   filter: FlaggedSectionsFilter;
   flagError: string | null;
   flagTask: TaskState | undefined;
+  isFlagTaskActive: boolean;
   isLoadingAnalysisSettings: boolean;
   analysisImportError: string | null;
   analysisImportMessage: string | null;
@@ -314,6 +315,7 @@ export const FlaggedSectionsDrawerContent = ({
   filter,
   flagError,
   flagTask,
+  isFlagTaskActive,
   isLoadingAnalysisSettings,
   isAnalysisImportActive,
   isImportingAnalysis,
@@ -325,7 +327,6 @@ export const FlaggedSectionsDrawerContent = ({
   onStartAnalysis,
   onSeek,
 }: FlaggedSectionsDrawerContentProps) => {
-  const isFlagTaskActive = flagTask?.status === "queued" || flagTask?.status === "running";
   const flagTaskError =
     flagTask?.jobs.find((job) => job.status === "failed")?.error ??
     (flagTask?.summary?.failed ? "Analysis failed." : null);

@@ -1,6 +1,6 @@
 import json
 
-from al_iyaal_worker.models import StartFlagBatchCommand
+from al_iyaal_worker.models import StartCutJobCommand, StartFlagBatchCommand
 from al_iyaal_worker.protocol import parse_worker_command
 from al_iyaal_worker.tasks.events import emit_task_job_done
 import pytest
@@ -41,6 +41,23 @@ def test_should_keep_agent_path_optional_for_cloud_flag_jobs() -> None:
 
     assert isinstance(command, StartFlagBatchCommand)
     assert command.agent_executable_path is None
+
+
+def test_should_default_cut_exports_to_apple_silicon_quality() -> None:
+    command = parse_worker_command(
+        json.dumps(
+            {
+                "outputMode": "video_cleaned_default",
+                "ranges": [{"start": "1.0", "end": "2.0"}],
+                "taskId": "task-1",
+                "type": "start_cut_job",
+                "videoPath": "/videos/episode.mp4",
+            }
+        )
+    )
+
+    assert isinstance(command, StartCutJobCommand)
+    assert command.compression_preset == "apple_silicon"
 
 
 def test_should_emit_job_done_with_a_required_output_path() -> None:

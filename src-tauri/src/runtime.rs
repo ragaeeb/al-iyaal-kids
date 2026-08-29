@@ -106,34 +106,17 @@ pub async fn ensure_runtime_ready(app: &AppHandle) -> Result<RuntimePaths, Strin
     let yap_executable = env::var("AIYAAL_YAP_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
-            // All candidates in priority order: prod bundle _up_/ first, then plain
-            // resource_dir variants, then dev-mode relative paths, then runtime dir.
-            let resource_candidates = [
-                // Prod bundle: Tauri prefixes ../ resources with _up_/
-                resource_dir.join("_up_/assets/bin/yap.sh"),
-                resource_dir.join("_up_/assets/bin/yap"),
-                // Fallback (no _up_ prefix)
-                resource_dir.join("assets/bin/yap.sh"),
-                resource_dir.join("assets/bin/yap"),
-            ];
-            if let Some(found) = resource_candidates.into_iter().find(|path| path.exists()) {
-                return found;
-            }
-
-            let local_candidates = [
-                PathBuf::from("assets/bin/yap.sh"),
-                PathBuf::from("assets/bin/yap"),
-            ];
-            if let Some(found) = local_candidates.into_iter().find(|path| path.exists()) {
-                return found;
-            }
-
-            let bundled_candidates = [runtime_dir.join("bin/yap.sh"), runtime_dir.join("bin/yap")];
-            if let Some(found) = bundled_candidates.into_iter().find(|path| path.exists()) {
-                found
-            } else {
-                PathBuf::from("yap")
-            }
+            // The packaged wrapper delegates through PATH, which excludes package-manager
+            // locations when macOS launches the app from Finder.
+            resolve_yap_executable(
+                &resource_dir,
+                &runtime_dir,
+                &[
+                    PathBuf::from("/opt/homebrew/bin/yap"),
+                    PathBuf::from("/usr/local/bin/yap"),
+                    PathBuf::from("/opt/local/bin/yap"),
+                ],
+            )
         });
 
     Ok(RuntimePaths {
@@ -146,6 +129,37 @@ pub async fn ensure_runtime_ready(app: &AppHandle) -> Result<RuntimePaths, Strin
 
 fn resolve_existing_path(candidates: &[PathBuf]) -> Option<PathBuf> {
     candidates.iter().find(|path| path.exists()).cloned()
+}
+
+fn resolve_yap_executable(
+    resource_dir: &Path,
+    runtime_dir: &Path,
+    system_candidates: &[PathBuf],
+) -> PathBuf {
+    if let Some(found) = resolve_existing_path(system_candidates) {
+        return found;
+    }
+
+    let resource_candidates = [
+        resource_dir.join("_up_/assets/bin/yap.sh"),
+        resource_dir.join("_up_/assets/bin/yap"),
+        resource_dir.join("assets/bin/yap.sh"),
+        resource_dir.join("assets/bin/yap"),
+    ];
+    if let Some(found) = resolve_existing_path(&resource_candidates) {
+        return found;
+    }
+
+    let local_candidates = [
+        PathBuf::from("assets/bin/yap.sh"),
+        PathBuf::from("assets/bin/yap"),
+    ];
+    if let Some(found) = resolve_existing_path(&local_candidates) {
+        return found;
+    }
+
+    let bundled_candidates = [runtime_dir.join("bin/yap.sh"), runtime_dir.join("bin/yap")];
+    resolve_existing_path(&bundled_candidates).unwrap_or_else(|| PathBuf::from("yap"))
 }
 
 fn resolve_python_candidates(app: &AppHandle) -> Vec<String> {
@@ -318,7 +332,52 @@ fn verify_runtime_python_packages(python_executable: &Path) -> Result<(), String
 
 #[cfg(test)]
 mod tests {
-    use super::runtime_import_check_script;
+    use std::{
+        fs,
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    use super::{resolve_yap_executable, runtime_import_check_script};
+
+    #[test]
+    fn should_prefer_installed_yap_over_packaged_path_wrapper() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after the Unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "al-iyaal-runtime-yap-{}-{unique}",
+            std::process::id()
+        ));
+        let resource_dir = root.join("resources");
+        let runtime_dir = root.join("runtime");
+        let packaged_wrapper = resource_dir.join("_up_/assets/bin/yap.sh");
+        let installed_yap = root.join("homebrew/bin/yap");
+        fs::create_dir_all(
+            packaged_wrapper
+                .parent()
+                .expect("packaged wrapper should have a parent"),
+        )
+        .expect("packaged wrapper directory should be created");
+        fs::create_dir_all(
+            installed_yap
+                .parent()
+                .expect("installed yap should have a parent"),
+        )
+        .expect("installed yap directory should be created");
+        fs::write(&packaged_wrapper, "wrapper").expect("packaged wrapper should be created");
+        fs::write(&installed_yap, "binary").expect("installed yap should be created");
+
+        let resolved = resolve_yap_executable(
+            &resource_dir,
+            &runtime_dir,
+            &[PathBuf::from(&installed_yap)],
+        );
+
+        assert_eq!(resolved, installed_yap);
+        fs::remove_dir_all(root).expect("temporary runtime fixture should be removed");
+    }
 
     #[test]
     fn should_check_for_the_active_demucs_mlx_runtime_dependencies() {

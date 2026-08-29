@@ -166,8 +166,11 @@ fn ensure_supported_cut_output_mode(output_mode: &str) -> Result<(), String> {
 }
 
 fn ensure_supported_compression_preset(preset: &str) -> Result<(), String> {
-    if preset != "max_compression" && preset != "balanced" {
-        return Err("Unsupported compression preset. Use max_compression or balanced.".to_string());
+    if preset != "apple_silicon" && preset != "max_compression" && preset != "balanced" {
+        return Err(
+            "Unsupported compression preset. Use apple_silicon, max_compression, or balanced."
+                .to_string(),
+        );
     }
 
     Ok(())
@@ -531,9 +534,9 @@ fn default_moderation_settings() -> ModerationSettings {
         amazon_nova_api_key: String::new(),
         analysis_strategy: "fast".to_string(),
         engine: "blacklist".to_string(),
-        content_criteria: "1. Adult relationships (kissing, romantic/sexual content, dating)\n2. Bad morals or unethical behavior\n3. Content against Islamic values and aqeedah\n4. Magic, sorcery, or supernatural practices\n5. Music references or musical performances\n6. Violence or frightening content\n7. Inappropriate language or themes".to_string(),
+        content_criteria: "1. Adult relationships (kissing, romantic/sexual content, dating)\n2. Bad morals or unethical behavior\n3. Content against Islamic values and aqeedah\n4. Magic, sorcery, divination, or supernatural practices\n5. Music references, musical performances, or instruments\n6. Alcohol, intoxicants, or drug use\n7. Violence or frightening content\n8. Inappropriate language or themes".to_string(),
         google_api_key: String::new(),
-        priority_guidelines: "Priority Guidelines:\n- HIGH: Major aqeedah violations, explicit magic/sorcery, sexual content\n- MEDIUM: Offensive language, questionable behavior, moderate violence\n- LOW: Mild concerns, ambiguous references".to_string(),
+        priority_guidelines: "Priority Guidelines:\n- HIGH: Major aqeedah violations, explicit magic/sorcery, sexual content, alcohol, or intoxicants\n- MEDIUM: Music, instruments, offensive language, questionable behavior, or moderate violence\n- LOW: Mild concerns or ambiguous references".to_string(),
         profanity_words: Vec::new(),
         rules: vec![
             ModerationRule {
@@ -545,6 +548,9 @@ fn default_moderation_settings() -> ModerationSettings {
                     "christmas".to_string(),
                     "xmas".to_string(),
                     "easter".to_string(),
+                    "halloween".to_string(),
+                    "santa".to_string(),
+                    "santa claus".to_string(),
                 ],
             },
             ModerationRule {
@@ -553,9 +559,255 @@ fn default_moderation_settings() -> ModerationSettings {
                 priority: "high".to_string(),
                 reason: "References magic or sorcery.".to_string(),
                 patterns: vec![
+                    "magic".to_string(),
+                    "magical".to_string(),
+                    "magician".to_string(),
+                    "magicians".to_string(),
                     "spell".to_string(),
+                    "spells".to_string(),
                     "sorcery".to_string(),
+                    "sorcerer".to_string(),
+                    "sorceress".to_string(),
                     "witchcraft".to_string(),
+                    "witch".to_string(),
+                    "witches".to_string(),
+                    "wizard".to_string(),
+                    "wizards".to_string(),
+                    "wizardry".to_string(),
+                    "warlock".to_string(),
+                    "enchantment".to_string(),
+                    "enchanted".to_string(),
+                    "curse".to_string(),
+                    "cursed".to_string(),
+                    "occult".to_string(),
+                    "voodoo".to_string(),
+                    "necromancy".to_string(),
+                    "necromancer".to_string(),
+                    "summoning".to_string(),
+                    "summon demons".to_string(),
+                    "demon".to_string(),
+                    "demons".to_string(),
+                    "satanic".to_string(),
+                    "satanism".to_string(),
+                    "séance".to_string(),
+                    "seance".to_string(),
+                    "fortune teller".to_string(),
+                    "fortune-teller".to_string(),
+                    "tarot".to_string(),
+                    "astrology".to_string(),
+                    "horoscope".to_string(),
+                    "potion".to_string(),
+                    "potions".to_string(),
+                    "ritual".to_string(),
+                    "rituals".to_string(),
+                    "paranormal".to_string(),
+                ],
+            },
+            ModerationRule {
+                rule_id: "sexual_content".to_string(),
+                category: "sexual".to_string(),
+                priority: "high".to_string(),
+                reason: "References sexual or sexually explicit content.".to_string(),
+                patterns: vec![
+                    "sex".to_string(),
+                    "sexual".to_string(),
+                    "sexual activity".to_string(),
+                    "sexual intercourse".to_string(),
+                    "intercourse".to_string(),
+                    "porn".to_string(),
+                    "pornography".to_string(),
+                    "pornographic".to_string(),
+                    "xxx".to_string(),
+                    "x-rated".to_string(),
+                    "nude".to_string(),
+                    "nudes".to_string(),
+                    "nudity".to_string(),
+                    "naked".to_string(),
+                    "topless".to_string(),
+                    "masturbate".to_string(),
+                    "masturbation".to_string(),
+                    "orgasm".to_string(),
+                    "ejaculate".to_string(),
+                    "ejaculation".to_string(),
+                    "erection".to_string(),
+                    "penis".to_string(),
+                    "vagina".to_string(),
+                    "vulva".to_string(),
+                    "genital".to_string(),
+                    "genitals".to_string(),
+                    "breasts".to_string(),
+                    "boobs".to_string(),
+                    "nipple".to_string(),
+                    "nipples".to_string(),
+                    "anus".to_string(),
+                    "anal sex".to_string(),
+                    "oral sex".to_string(),
+                    "blowjob".to_string(),
+                    "handjob".to_string(),
+                    "prostitute".to_string(),
+                    "prostitution".to_string(),
+                    "stripper".to_string(),
+                    "strip club".to_string(),
+                    "sext".to_string(),
+                    "sexting".to_string(),
+                    "rape".to_string(),
+                    "sexual assault".to_string(),
+                    "molest".to_string(),
+                    "molestation".to_string(),
+                    "incest".to_string(),
+                    "pedophile".to_string(),
+                    "pedophilia".to_string(),
+                    "fetish".to_string(),
+                    "bdsm".to_string(),
+                    "bondage".to_string(),
+                    "erotic".to_string(),
+                    "erotica".to_string(),
+                    "adultery".to_string(),
+                    "fornication".to_string(),
+                    "love affair".to_string(),
+                ],
+            },
+            ModerationRule {
+                rule_id: "music_content".to_string(),
+                category: "music".to_string(),
+                priority: "medium".to_string(),
+                reason: "References music or a musical performance.".to_string(),
+                patterns: vec![
+                    "music".to_string(),
+                    "musical".to_string(),
+                    "musician".to_string(),
+                    "musicians".to_string(),
+                    "song".to_string(),
+                    "songs".to_string(),
+                    "sing".to_string(),
+                    "sings".to_string(),
+                    "sang".to_string(),
+                    "singing".to_string(),
+                    "singer".to_string(),
+                    "singers".to_string(),
+                    "concert".to_string(),
+                    "band".to_string(),
+                    "orchestra".to_string(),
+                    "choir".to_string(),
+                    "karaoke".to_string(),
+                    "soundtrack".to_string(),
+                    "melody".to_string(),
+                    "melodies".to_string(),
+                    "rhythm".to_string(),
+                    "rhythms".to_string(),
+                    "beat".to_string(),
+                    "beats".to_string(),
+                    "rap".to_string(),
+                    "rapper".to_string(),
+                    "pop music".to_string(),
+                    "rock music".to_string(),
+                    "jazz".to_string(),
+                    "classical music".to_string(),
+                    "dance music".to_string(),
+                    "music video".to_string(),
+                ],
+            },
+            ModerationRule {
+                rule_id: "musical_instruments".to_string(),
+                category: "instruments".to_string(),
+                priority: "medium".to_string(),
+                reason: "References a musical instrument or instrumental performance.".to_string(),
+                patterns: vec![
+                    "instrument".to_string(),
+                    "instruments".to_string(),
+                    "musical instrument".to_string(),
+                    "musical instruments".to_string(),
+                    "piano".to_string(),
+                    "guitar".to_string(),
+                    "electric guitar".to_string(),
+                    "bass guitar".to_string(),
+                    "drum".to_string(),
+                    "drums".to_string(),
+                    "drummer".to_string(),
+                    "violin".to_string(),
+                    "viola".to_string(),
+                    "cello".to_string(),
+                    "double bass".to_string(),
+                    "flute".to_string(),
+                    "recorder".to_string(),
+                    "trumpet".to_string(),
+                    "trombone".to_string(),
+                    "saxophone".to_string(),
+                    "clarinet".to_string(),
+                    "oboe".to_string(),
+                    "bassoon".to_string(),
+                    "harp".to_string(),
+                    "lute".to_string(),
+                    "oud".to_string(),
+                    "ukulele".to_string(),
+                    "banjo".to_string(),
+                    "accordion".to_string(),
+                    "harmonica".to_string(),
+                    "tambourine".to_string(),
+                    "cymbal".to_string(),
+                    "percussion".to_string(),
+                    "xylophone".to_string(),
+                    "marimba".to_string(),
+                    "synthesizer".to_string(),
+                    "bagpipes".to_string(),
+                ],
+            },
+            ModerationRule {
+                rule_id: "alcohol_intoxicants".to_string(),
+                category: "intoxicants".to_string(),
+                priority: "high".to_string(),
+                reason: "References alcohol, intoxicants, or drug use.".to_string(),
+                patterns: vec![
+                    "alcohol".to_string(),
+                    "alcoholic".to_string(),
+                    "alcoholism".to_string(),
+                    "beer".to_string(),
+                    "wine".to_string(),
+                    "whiskey".to_string(),
+                    "whisky".to_string(),
+                    "vodka".to_string(),
+                    "rum".to_string(),
+                    "gin".to_string(),
+                    "tequila".to_string(),
+                    "brandy".to_string(),
+                    "champagne".to_string(),
+                    "prosecco".to_string(),
+                    "cognac".to_string(),
+                    "liqueur".to_string(),
+                    "liquor".to_string(),
+                    "booze".to_string(),
+                    "cocktail".to_string(),
+                    "cocktails".to_string(),
+                    "martini".to_string(),
+                    "margarita".to_string(),
+                    "sake".to_string(),
+                    "absinthe".to_string(),
+                    "ale".to_string(),
+                    "lager".to_string(),
+                    "stout".to_string(),
+                    "drunk".to_string(),
+                    "drunken".to_string(),
+                    "intoxicated".to_string(),
+                    "intoxication".to_string(),
+                    "tipsy".to_string(),
+                    "hangover".to_string(),
+                    "marijuana".to_string(),
+                    "cannabis".to_string(),
+                    "weed".to_string(),
+                    "hashish".to_string(),
+                    "opium".to_string(),
+                    "heroin".to_string(),
+                    "cocaine".to_string(),
+                    "methamphetamine".to_string(),
+                    "ecstasy".to_string(),
+                    "mdma".to_string(),
+                    "lsd".to_string(),
+                    "fentanyl".to_string(),
+                    "narcotic".to_string(),
+                    "narcotics".to_string(),
+                    "drug use".to_string(),
+                    "drug abuse".to_string(),
+                    "stoned".to_string(),
                 ],
             },
             ModerationRule {
@@ -563,7 +815,29 @@ fn default_moderation_settings() -> ModerationSettings {
                 category: "language".to_string(),
                 priority: "medium".to_string(),
                 reason: "Contains offensive language.".to_string(),
-                patterns: vec!["stupid".to_string(), "idiot".to_string(), "dumb".to_string()],
+                patterns: vec![
+                    "stupid".to_string(),
+                    "idiot".to_string(),
+                    "idiots".to_string(),
+                    "dumb".to_string(),
+                    "dumbass".to_string(),
+                    "moron".to_string(),
+                    "morons".to_string(),
+                    "imbecile".to_string(),
+                    "jerk".to_string(),
+                    "loser".to_string(),
+                    "shut up".to_string(),
+                    "crap".to_string(),
+                    "damn".to_string(),
+                    "bullshit".to_string(),
+                    "asshole".to_string(),
+                    "bastard".to_string(),
+                    "bitch".to_string(),
+                    "douchebag".to_string(),
+                    "fool".to_string(),
+                    "screw you".to_string(),
+                    "son of a bitch".to_string(),
+                ],
             },
         ],
     }
@@ -643,6 +917,35 @@ fn moderation_settings_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(app_data_dir.join("settings/moderation.json"))
 }
 
+fn merge_default_moderation_rules(settings: &mut ModerationSettings) {
+    if settings.rules.is_empty() {
+        return;
+    }
+
+    for default_rule in default_moderation_settings().rules {
+        let existing_index = settings
+            .rules
+            .iter()
+            .position(|rule| rule.rule_id == default_rule.rule_id);
+
+        let Some(existing_index) = existing_index else {
+            settings.rules.push(default_rule);
+            continue;
+        };
+
+        let existing_rule = &mut settings.rules[existing_index];
+        for pattern in default_rule.patterns {
+            if !existing_rule
+                .patterns
+                .iter()
+                .any(|existing| existing.eq_ignore_ascii_case(&pattern))
+            {
+                existing_rule.patterns.push(pattern);
+            }
+        }
+    }
+}
+
 fn read_or_initialize_moderation_settings(app: &AppHandle) -> Result<ModerationSettings, String> {
     let settings_path = moderation_settings_path(app)?;
     if settings_path.exists() {
@@ -652,8 +955,10 @@ fn read_or_initialize_moderation_settings(app: &AppHandle) -> Result<ModerationS
                 settings_path.display()
             )
         })?;
-        return serde_json::from_str(&content)
-            .map_err(|error| format!("Invalid moderation settings JSON: {error}"));
+        let mut settings = serde_json::from_str(&content)
+            .map_err(|error| format!("Invalid moderation settings JSON: {error}"))?;
+        merge_default_moderation_rules(&mut settings);
+        return Ok(settings);
     }
 
     let defaults = default_moderation_settings();
@@ -1129,12 +1434,12 @@ mod tests {
         cut_ranges_sidecar_path, default_moderation_settings, enqueue_task_command,
         ensure_supported_cancel_mode, ensure_supported_compression_preset,
         ensure_supported_cut_output_mode, ensure_supported_output_mode, ensure_supported_yap_mode,
-        get_batch_state_inner, get_task_state_inner, parse_time_to_seconds, resolve_input_paths,
-        save_analysis_sidecar, save_cut_ranges, try_send_batch_cancel, try_send_task_cancel,
-        validate_allowed_extensions, validate_analysis_import_path, validate_cut_ranges,
-        validate_existing_file_path, validate_moderation_settings, validate_preview_video_path,
-        validate_read_text_file_path, validate_trash_file_path, write_file_atomically,
-        SUPPORTED_VIDEO_EXTENSIONS,
+        get_batch_state_inner, get_task_state_inner, merge_default_moderation_rules,
+        parse_time_to_seconds, resolve_input_paths, save_analysis_sidecar, save_cut_ranges,
+        try_send_batch_cancel, try_send_task_cancel, validate_allowed_extensions,
+        validate_analysis_import_path, validate_cut_ranges, validate_existing_file_path,
+        validate_moderation_settings, validate_preview_video_path, validate_read_text_file_path,
+        validate_trash_file_path, write_file_atomically, SUPPORTED_VIDEO_EXTENSIONS,
     };
     use crate::{
         protocol::WorkerCommand,
@@ -1295,6 +1600,7 @@ mod tests {
 
     #[test]
     fn should_accept_supported_compression_presets() {
+        assert!(ensure_supported_compression_preset("apple_silicon").is_ok());
         assert!(ensure_supported_compression_preset("max_compression").is_ok());
         assert!(ensure_supported_compression_preset("balanced").is_ok());
     }
@@ -1823,6 +2129,58 @@ mod tests {
         let settings = default_moderation_settings();
         assert!(!settings.rules.is_empty());
         assert_eq!(settings.rules[0].priority, "high");
+    }
+
+    #[test]
+    fn should_cover_requested_blacklist_categories_by_default() {
+        let settings = default_moderation_settings();
+
+        for (rule_id, pattern) in [
+            ("sexual_content", "pornography"),
+            ("magic_sorcery", "witchcraft"),
+            ("music_content", "music"),
+            ("musical_instruments", "piano"),
+            ("alcohol_intoxicants", "wine"),
+        ] {
+            assert!(
+                settings.rules.iter().any(|rule| rule.rule_id == rule_id
+                    && rule.patterns.iter().any(|value| value == pattern)),
+                "missing blacklist coverage for {rule_id}: {pattern}"
+            );
+        }
+    }
+
+    #[test]
+    fn should_upgrade_saved_blacklist_rules_with_new_defaults() {
+        let mut settings = default_moderation_settings();
+        settings.rules.retain(|rule| {
+            matches!(
+                rule.rule_id.as_str(),
+                "aqeedah_christmas" | "magic_sorcery" | "offensive_language"
+            )
+        });
+        settings
+            .rules
+            .iter_mut()
+            .find(|rule| rule.rule_id == "magic_sorcery")
+            .unwrap()
+            .patterns = vec!["spell".to_string()];
+
+        merge_default_moderation_rules(&mut settings);
+
+        assert!(settings.rules.iter().any(|rule| {
+            rule.rule_id == "sexual_content"
+                && rule.patterns.iter().any(|pattern| pattern == "pornography")
+        }));
+        assert!(settings.rules.iter().any(|rule| {
+            rule.rule_id == "magic_sorcery"
+                && rule.patterns.iter().any(|pattern| pattern == "witchcraft")
+        }));
+
+        let mut empty_settings = settings;
+        empty_settings.rules.clear();
+        merge_default_moderation_rules(&mut empty_settings);
+        assert!(empty_settings.rules.is_empty());
     }
 
     #[test]

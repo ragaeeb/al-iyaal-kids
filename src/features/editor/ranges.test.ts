@@ -20,6 +20,27 @@ describe("parseSavedCutRanges", () => {
 });
 
 describe("toFlaggedTimelineRanges", () => {
+  it("should reject non-finite and non-positive video durations", () => {
+    for (const duration of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 0]) {
+      expect(
+        toFlaggedTimelineRanges(
+          [
+            {
+              category: "language",
+              priority: "medium",
+              reason: "Review this subtitle.",
+              ruleId: "language",
+              startTime: 10,
+              text: "Flagged subtitle",
+            },
+          ],
+          [],
+          duration,
+        ),
+      ).toEqual([]);
+    }
+  });
+
   it("should use subtitle bounds and text when a flag has only a timestamp", () => {
     const ranges = toFlaggedTimelineRanges(
       [

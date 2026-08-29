@@ -8,7 +8,7 @@ export const toFlaggedTimelineRanges = (
   subtitles: SubtitleEntry[],
   duration: number,
 ): FlaggedTimelineRange[] => {
-  if (duration <= 0) {
+  if (!Number.isFinite(duration) || duration <= 0) {
     return [];
   }
 

@@ -46,7 +46,7 @@ What it does:
 - derives the Apple Team ID from the selected identity when possible
 - uses and validates the `al-iyaal-kids-notary` Keychain profile by default
 - if the profile is missing or invalid, runs `./scripts/setup-notary.sh`, which wraps Apple’s interactive `notarytool store-credentials` flow
-- builds a signed Apple Silicon DMG through Tauri
+- builds a signed DMG for `AIYAAL_MACOS_TARGET` through Tauri (default: `aarch64-apple-darwin`)
 - verifies the built `.app` signature and DMG integrity
 - submits the DMG to Apple notarization with live logs
 - fetches the notarization log JSON
@@ -124,14 +124,15 @@ bun run release:macos:preflight --profile another-notary-profile
 
 After a successful run you should have:
 
-- a signed `.app` inside `src-tauri/target/aarch64-apple-darwin/release/bundle/macos/`
-- a signed and stapled `.dmg` inside `src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/`
+- a signed `.app` and DMG inside `src-tauri/target/<target>/release/bundle/`, where `<target>` defaults to `aarch64-apple-darwin`
 - a verified `.dmg.sha256` sidecar beside the DMG
 - notarization JSON logs under `.logs/sign-notarize/<timestamp>/`
 
 Note:
 - when Tauri is asked to build only a DMG, it may clean the intermediate `.app` bundle afterwards
 - the local script tolerates that and continues using the DMG as the notarization/stapling target
+
+# Run these commands only when the `.app` bundle was retained:
 
 Useful verification commands:
 

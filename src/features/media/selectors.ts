@@ -34,6 +34,9 @@ const getTaskOutputPath = (task: TaskState | undefined) => {
   return task?.jobs.find((job) => typeof job.outputPath === "string")?.outputPath ?? null;
 };
 
+export const isFlagTaskActive = (isStarting: boolean, task: TaskState | undefined) =>
+  isStarting || task?.status === "queued" || task?.status === "running";
+
 const buildLatestTaskOutputPathByInput = (
   tasksById: TaskMap,
   taskKind: TaskKind,

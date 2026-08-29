@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DrawerClose } from "@/components/ui/drawer";
 import { trashFile } from "@/features/batch/transport";
-import { parseSavedCutRanges } from "@/features/editor/ranges";
+import { parseSavedCutRanges, toFlaggedTimelineRanges } from "@/features/editor/ranges";
 import { clampSeekTime } from "@/features/editor/seek";
 import { findSubtitleAtTime, formatTime, parseSrt } from "@/features/editor/subtitles";
 import { canResetVideoToOriginal } from "@/features/editor/video-reset";
@@ -25,7 +25,11 @@ import {
   toCutRangesSidecarPath,
   toSrtSidecarPath,
 } from "@/features/editor/video-sidecars";
-import { getLatestTaskForInput, getTaskOutputPath } from "@/features/media/selectors";
+import {
+  getLatestTaskForInput,
+  getTaskOutputPath,
+  isFlagTaskActive as isFlagTaskActiveSelector,
+} from "@/features/media/selectors";
 import {
   getMediaPreviewUrl,
   readAnalysisImportFile,
@@ -673,6 +677,7 @@ const SubtitleOverlay = ({
 type VideoControlsProps = {
   currentTime: number;
   duration: number;
+  flaggedSegments: AnalysisSidecar["flagged"];
   hoverPosition: number | null;
   hoverTime: number | null;
   isPlaying: boolean;
@@ -684,11 +689,19 @@ type VideoControlsProps = {
   onSeekHover: (time: number, position: number) => void;
   onSeekHoverEnd: () => void;
   onTogglePlayback: () => void;
+  subtitles: SubtitleEntry[];
 };
+
+const flaggedRangeColors = {
+  high: "bg-red-500",
+  low: "bg-yellow-300",
+  medium: "bg-orange-400",
+} as const;
 
 const VideoControls = ({
   currentTime,
   duration,
+  flaggedSegments,
   hoverPosition,
   hoverTime,
   isPlaying,
@@ -700,7 +713,14 @@ const VideoControls = ({
   onSeekHover,
   onSeekHoverEnd,
   onTogglePlayback,
+  subtitles,
 }: VideoControlsProps) => {
+  const flaggedRanges = toFlaggedTimelineRanges(flaggedSegments, subtitles, duration);
+  const hoveredFlag =
+    hoverTime === null
+      ? undefined
+      : flaggedRanges.find((range) => range.startTime <= hoverTime && hoverTime <= range.endTime);
+
   return (
     <div className="absolute inset-x-0 bottom-0 p-3">
       <div className="flex items-center gap-2 rounded-[18px] border border-white/12 bg-black/45 px-3 py-2 text-white shadow-[0_10px_30px_rgba(0,0,0,0.38)] backdrop-blur-md">
@@ -754,12 +774,37 @@ const VideoControls = ({
         <div className="relative min-w-0 flex-1">
           {hoverTime !== null && hoverPosition !== null ? (
             <div
-              className="pointer-events-none absolute bottom-full mb-2 -translate-x-1/2 rounded-full border border-white/15 bg-black/80 px-2 py-1 font-mono text-[10px] text-white shadow-[0_8px_20px_rgba(0,0,0,0.3)]"
+              className="pointer-events-none absolute bottom-full z-20 mb-2 max-w-72 -translate-x-1/2 rounded-lg border border-white/15 bg-black/85 px-2.5 py-1.5 text-[10px] text-white shadow-[0_8px_20px_rgba(0,0,0,0.3)]"
               style={{ left: `${hoverPosition}%` }}
             >
-              {formatTime(hoverTime, duration)}
+              <div className="flex items-center gap-1.5 font-mono">
+                <span>{formatTime(hoverTime, duration)}</span>
+                {hoveredFlag ? (
+                  <span className="font-semibold uppercase">{hoveredFlag.priority}</span>
+                ) : null}
+              </div>
+              {hoveredFlag ? (
+                <p className="mt-1 line-clamp-3 text-left text-white/90 leading-4">
+                  {hoveredFlag.text}
+                </p>
+              ) : null}
             </div>
           ) : null}
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-x-0 top-1/2 h-2 -translate-y-1/2 overflow-hidden rounded-full bg-white/20"
+          >
+            {flaggedRanges.map((range) => (
+              <span
+                key={`${range.startTime}-${range.endTime}-${range.priority}-${range.ruleId}-${range.text}`}
+                className={`absolute inset-y-0 ${flaggedRangeColors[range.priority]}`}
+                style={{
+                  left: `${(range.startTime / duration) * 100}%`,
+                  width: `${Math.max(((range.endTime - range.startTime) / duration) * 100, 0.35)}%`,
+                }}
+              />
+            ))}
+          </div>
           <input
             type="range"
             min={0}
@@ -776,7 +821,7 @@ const VideoControls = ({
               const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
               onSeekHover(clampSeekTime(duration * ratio, duration), ratio * 100);
             }}
-            className="h-2 w-full cursor-pointer appearance-none rounded-full bg-white/20 accent-white"
+            className="relative z-10 h-2 w-full cursor-pointer appearance-none rounded-full bg-transparent accent-white"
             aria-label="Seek video"
           />
         </div>
@@ -1241,6 +1286,7 @@ type EditorPanelViewProps = {
   flaggedSectionsFilter: FlaggedSectionsFilter;
   flagError: string | null;
   flagTask: TaskState | undefined;
+  isFlagTaskActive: boolean;
   handleVideoError: () => void;
   hasStartedMarking: boolean;
   hasSubtitleSidecar: boolean;
@@ -1451,6 +1497,7 @@ const EditorToolbar = ({
 
 type EditorPreviewProps = Pick<
   EditorPanelViewProps,
+  | "analysisSidecar"
   | "currentSubtitle"
   | "currentTime"
   | "duration"
@@ -1473,12 +1520,14 @@ type EditorPreviewProps = Pick<
   | "onVideoPause"
   | "onVideoPlay"
   | "playbackError"
+  | "subtitles"
   | "videoPath"
   | "videoRef"
   | "videoSrc"
 >;
 
 const EditorPreview = ({
+  analysisSidecar,
   currentSubtitle,
   currentTime,
   duration,
@@ -1501,6 +1550,7 @@ const EditorPreview = ({
   onVideoPause,
   onVideoPlay,
   playbackError,
+  subtitles,
   videoPath,
   videoRef,
   videoSrc,
@@ -1549,6 +1599,7 @@ const EditorPreview = ({
         <VideoControls
           currentTime={currentTime}
           duration={duration}
+          flaggedSegments={analysisSidecar?.flagged ?? []}
           hoverPosition={hoverSeekPosition}
           hoverTime={hoverSeekTime}
           isPlaying={isPlaying}
@@ -1560,6 +1611,7 @@ const EditorPreview = ({
           onSeekHover={onSeekHover}
           onSeekHoverEnd={onSeekHoverEnd}
           onTogglePlayback={onTogglePlayback}
+          subtitles={subtitles}
         />
       ) : null}
     </div>
@@ -1603,6 +1655,7 @@ const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProp
   const [analysisImportMessage, setAnalysisImportMessage] = useState<string | null>(null);
   const [analysisImportHasWarnings, setAnalysisImportHasWarnings] = useState(false);
   const [isImportingAnalysis, setIsImportingAnalysis] = useState(false);
+  const [isStartingAnalysis, setIsStartingAnalysis] = useState(false);
   const [isFlaggedSectionsOpen, setIsFlaggedSectionsOpen] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const dropTargetRef = useRef<HTMLDivElement>(null);
@@ -1619,7 +1672,7 @@ const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProp
     selectedVideoPath,
     videoPath,
   );
-  const isFlagTaskActive = flagTask?.status === "queued" || flagTask?.status === "running";
+  const isFlagTaskActive = isFlagTaskActiveSelector(isStartingAnalysis, flagTask);
   const cutOutputPath = getTaskOutputPath(cutTask);
   const currentSubtitle = findSubtitleAtTime(subtitles, currentTime);
   const isCutTaskActive =
@@ -1971,6 +2024,15 @@ const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProp
     videoRef,
   });
 
+  const startAnalysis = useCallback(async () => {
+    setIsStartingAnalysis(true);
+    try {
+      await startFlaggedSectionAnalysis();
+    } finally {
+      setIsStartingAnalysis(false);
+    }
+  }, [startFlaggedSectionAnalysis]);
+
   return (
     <EditorPanelView
       analysisImportError={analysisImportError}
@@ -2007,6 +2069,7 @@ const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProp
       flaggedSectionsBodyRef={flaggedSectionsBodyRef}
       flaggedSectionsFilter={flaggedSectionsFilter}
       flagTask={flagTask}
+      isFlagTaskActive={isFlagTaskActive}
       flagError={getTaskStartError(
         controller.state.errorTaskKind,
         controller.state.errorMessage,
@@ -2055,7 +2118,7 @@ const SimpleCutEditorPanel = ({ controller, isActive }: SimpleCutEditorPanelProp
       onSeekHover={updateSeekHover}
       onSeekHoverEnd={clearSeekHover}
       onSetCompressionPreset={setCompressionPreset}
-      onStartAnalysis={startFlaggedSectionAnalysis}
+      onStartAnalysis={startAnalysis}
       onStartCutExport={startCutExport}
       onStartMark={markStart}
       onStartSubtitleGeneration={startSubtitleGeneration}
@@ -2111,6 +2174,7 @@ const EditorPanelView = ({
   flaggedSectionsFilter,
   flagError,
   flagTask,
+  isFlagTaskActive,
   handleVideoError,
   hasStartedMarking,
   hasSubtitleSidecar,
@@ -2247,6 +2311,7 @@ const EditorPanelView = ({
           filter={flaggedSectionsFilter}
           flagError={flagError}
           flagTask={flagTask}
+          isFlagTaskActive={isFlagTaskActive}
           isLoadingAnalysisSettings={isLoadingAnalysisSettings}
           isAnalysisImportActive={isAnalysisImportActive}
           isImportingAnalysis={isImportingAnalysis}
@@ -2297,6 +2362,7 @@ const EditorPanelView = ({
         ) : null}
 
         <EditorPreview
+          analysisSidecar={analysisSidecar}
           currentSubtitle={currentSubtitle}
           currentTime={currentTime}
           duration={duration}
@@ -2319,6 +2385,7 @@ const EditorPanelView = ({
           onVideoPause={onVideoPause}
           onVideoPlay={onVideoPlay}
           playbackError={playbackError}
+          subtitles={subtitles}
           videoPath={videoPath}
           videoRef={videoRef}
           videoSrc={videoSrc}

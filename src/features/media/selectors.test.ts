@@ -8,6 +8,7 @@ import {
   getLatestTaskForInput,
   getLatestTaskLogLine,
   getTaskOutputPath,
+  isFlagTaskActive,
 } from "@/features/media/selectors";
 import type { AnalysisSidecar, TaskState } from "@/features/media/types";
 import type { ModerationJobResult } from "@/features/moderation/results";
@@ -29,6 +30,14 @@ describe("media selectors", () => {
 
     expect(getLatestTask(tasksById, "transcription")?.taskId).toBe("three");
     expect(getLatestTask(tasksById, "cut")).toBeUndefined();
+  });
+
+  it("should treat a flag task as active before registration completes", () => {
+    expect(isFlagTaskActive(true, undefined)).toBe(true);
+    expect(isFlagTaskActive(false, createTask("queued", "flag"))).toBe(true);
+    expect(isFlagTaskActive(false, { ...createTask("done", "flag"), status: "completed" })).toBe(
+      false,
+    );
   });
 
   it("should return the latest task for a given input path", () => {

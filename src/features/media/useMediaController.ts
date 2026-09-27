@@ -33,6 +33,7 @@ import {
   createBoundedEventBuffer,
   drainBoundedEventBuffer,
 } from "@/features/shared/bounded-event-buffer";
+import { toErrorMessage } from "@/lib/errors";
 
 const MAX_PRE_REGISTRATION_TASK_EVENTS = 256;
 // Completed task IDs can leave the registry; active IDs stay known for delivery correctness.
@@ -134,8 +135,9 @@ export const useMediaController = () => {
         if (!mounted) {
           return;
         }
+        console.error("[useMediaController] subscribeToTaskEvents failed:", error);
         dispatch({
-          payload: error instanceof Error ? error.message : "Failed to subscribe to task events.",
+          payload: toErrorMessage(error, "Failed to subscribe to task events."),
           type: "load_videos_error",
         });
       })
@@ -222,8 +224,9 @@ export const useMediaController = () => {
         type: "load_videos_success",
       });
     } catch (error: unknown) {
+      console.error("[useMediaController] loadVideos failed:", error);
       dispatch({
-        payload: error instanceof Error ? error.message : "Failed loading videos.",
+        payload: toErrorMessage(error, "Failed loading videos."),
         type: "load_videos_error",
       });
     }
@@ -248,9 +251,10 @@ export const useMediaController = () => {
         taskKind: "transcription",
       });
     } catch (error: unknown) {
+      console.error("[useMediaController] startTranscription failed:", error);
       dispatch({
         payload: {
-          message: error instanceof Error ? error.message : "Failed starting transcription batch.",
+          message: toErrorMessage(error, "Failed starting transcription batch."),
           taskKind: "transcription",
         },
         type: "task_start_error",
@@ -286,9 +290,10 @@ export const useMediaController = () => {
         taskKind: "flag",
       });
     } catch (error: unknown) {
+      console.error("[useMediaController] startFlagging failed:", error);
       dispatch({
         payload: {
-          message: error instanceof Error ? error.message : "Failed starting flag batch.",
+          message: toErrorMessage(error, "Failed starting flag batch."),
           taskKind: "flag",
         },
         type: "task_start_error",
@@ -317,9 +322,10 @@ export const useMediaController = () => {
       });
       return response.taskId;
     } catch (error: unknown) {
+      console.error("[useMediaController] startCut failed:", error);
       dispatch({
         payload: {
-          message: error instanceof Error ? error.message : "Failed starting cut task.",
+          message: toErrorMessage(error, "Failed starting cut task."),
           taskKind: "cut",
         },
         type: "task_start_error",
@@ -356,9 +362,10 @@ export const useMediaController = () => {
         type: "task_cancel_requested",
       });
     } catch (error: unknown) {
+      console.error("[useMediaController] cancelTaskById failed:", error);
       dispatch({
         payload: {
-          message: error instanceof Error ? error.message : "Failed requesting task cancellation.",
+          message: toErrorMessage(error, "Failed requesting task cancellation."),
           taskKind,
         },
         type: "task_start_error",

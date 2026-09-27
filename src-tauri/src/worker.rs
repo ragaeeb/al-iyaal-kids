@@ -97,8 +97,36 @@ pub async fn ensure_worker_sender(
     )
     .map_err(|error| format!("Failed to emit task startup event: {error}"))?;
 
-    let runtime = ensure_runtime_ready(&app).await?;
-    let worker_sender = spawn_worker_process(app.clone(), state.clone(), runtime).await?;
+    let runtime = match ensure_runtime_ready(&app).await {
+        Ok(paths) => paths,
+        Err(error) => {
+            eprintln!("[worker] Runtime preparation failed: {error}");
+            let _ = app.emit(
+                BATCH_EVENT_NAME,
+                BatchEvent::worker_status(WorkerStatusKind::Error, &error),
+            );
+            let _ = app.emit(
+                TASK_EVENT_NAME,
+                TaskEvent::worker_status(WorkerStatusKind::Error, &error),
+            );
+            return Err(error);
+        }
+    };
+    let worker_sender = match spawn_worker_process(app.clone(), state.clone(), runtime).await {
+        Ok(sender) => sender,
+        Err(error) => {
+            eprintln!("[worker] Failed to spawn worker process: {error}");
+            let _ = app.emit(
+                BATCH_EVENT_NAME,
+                BatchEvent::worker_status(WorkerStatusKind::Error, &error),
+            );
+            let _ = app.emit(
+                TASK_EVENT_NAME,
+                TaskEvent::worker_status(WorkerStatusKind::Error, &error),
+            );
+            return Err(error);
+        }
+    };
     state.set_worker_sender(worker_sender.clone()).await;
 
     app.emit(

@@ -1032,51 +1032,60 @@ pub async fn start_batch(
     state: State<'_, AppState>,
     request: StartBatchRequest,
 ) -> Result<BatchStartedResponse, String> {
-    ensure_supported_output_mode(&request.output_dir_mode)?;
-    let allowed_extensions = validate_allowed_extensions(
-        &request.allowed_extensions,
-        &SUPPORTED_VIDEO_EXTENSIONS,
-        "video",
-    )?;
-    let input_paths = resolve_input_paths(
-        request.input_dir.as_deref(),
-        request.input_paths.as_ref(),
-        &allowed_extensions,
-        "No .mp4/.mov files were selected.",
-    )?;
-    let first_input_path = input_paths
-        .first()
-        .ok_or_else(|| "No .mp4/.mov files were selected.".to_string())?;
-    let output_dir = build_output_dir(Path::new(first_input_path).parent().ok_or_else(|| {
-        format!("Failed to resolve parent directory for input path: {first_input_path}")
-    })?);
-    let batch_id = Uuid::new_v4().to_string();
+    let result = async {
+        ensure_supported_output_mode(&request.output_dir_mode)?;
+        let allowed_extensions = validate_allowed_extensions(
+            &request.allowed_extensions,
+            &SUPPORTED_VIDEO_EXTENSIONS,
+            "video",
+        )?;
+        let input_paths = resolve_input_paths(
+            request.input_dir.as_deref(),
+            request.input_paths.as_ref(),
+            &allowed_extensions,
+            "No .mp4/.mov files were selected.",
+        )?;
+        let first_input_path = input_paths
+            .first()
+            .ok_or_else(|| "No .mp4/.mov files were selected.".to_string())?;
+        let output_dir = build_output_dir(Path::new(first_input_path).parent().ok_or_else(|| {
+            format!("Failed to resolve parent directory for input path: {first_input_path}")
+        })?);
+        let batch_id = Uuid::new_v4().to_string();
 
-    let worker_sender = ensure_worker_sender(app.clone(), state.inner().clone()).await?;
+        let worker_sender = ensure_worker_sender(app.clone(), state.inner().clone()).await?;
 
-    enqueue_batch_command(
-        state.inner(),
-        &worker_sender,
-        BatchState {
-            batch_id: batch_id.clone(),
-            status: BatchStatus::Queued,
-            jobs: create_batch_jobs(&input_paths),
-            summary: None,
-        },
-        WorkerCommand::StartBatch {
-            batch_id: batch_id.clone(),
-            input_paths: input_paths.clone(),
-            output_dir: output_dir.to_string_lossy().to_string(),
-            compute_mode: "auto".to_string(),
-        },
-    )
-    .await?;
+        enqueue_batch_command(
+            state.inner(),
+            &worker_sender,
+            BatchState {
+                batch_id: batch_id.clone(),
+                status: BatchStatus::Queued,
+                jobs: create_batch_jobs(&input_paths),
+                summary: None,
+            },
+            WorkerCommand::StartBatch {
+                batch_id: batch_id.clone(),
+                input_paths: input_paths.clone(),
+                output_dir: output_dir.to_string_lossy().to_string(),
+                compute_mode: "auto".to_string(),
+            },
+        )
+        .await?;
 
-    Ok(BatchStartedResponse {
-        batch_id,
-        file_count: input_paths.len(),
-        input_paths,
-    })
+        Ok(BatchStartedResponse {
+            batch_id,
+            file_count: input_paths.len(),
+            input_paths,
+        })
+    }
+    .await;
+
+    if let Err(ref error) = result {
+        eprintln!("[commands::start_batch] Error: {error}");
+    }
+
+    result
 }
 
 #[tauri::command]
@@ -1085,53 +1094,62 @@ pub async fn start_transcription_batch(
     state: State<'_, AppState>,
     request: StartTranscriptionBatchRequest,
 ) -> Result<BatchStartedResponse, String> {
-    ensure_supported_yap_mode(&request.yap_mode)?;
-    let allowed_extensions = request
-        .allowed_extensions
-        .map(|extensions| {
-            validate_allowed_extensions(&extensions, &SUPPORTED_VIDEO_EXTENSIONS, "video")
+    let result = async {
+        ensure_supported_yap_mode(&request.yap_mode)?;
+        let allowed_extensions = request
+            .allowed_extensions
+            .map(|extensions| {
+                validate_allowed_extensions(&extensions, &SUPPORTED_VIDEO_EXTENSIONS, "video")
+            })
+            .transpose()?
+            .unwrap_or_else(|| {
+                SUPPORTED_VIDEO_EXTENSIONS
+                    .iter()
+                    .map(|extension| (*extension).to_string())
+                    .collect()
+            });
+        let input_paths = resolve_input_paths(
+            request.input_dir.as_deref(),
+            request.input_paths.as_ref(),
+            &allowed_extensions,
+            "No .mp4/.mov files were selected.",
+        )?;
+
+        let task_id = Uuid::new_v4().to_string();
+
+        let worker_sender = ensure_worker_sender(app.clone(), state.inner().clone()).await?;
+        enqueue_task_command(
+            state.inner(),
+            &worker_sender,
+            TaskState {
+                task_id: task_id.clone(),
+                task_kind: TaskKind::Transcription,
+                status: TaskStatus::Queued,
+                jobs: create_task_jobs(&input_paths),
+                summary: None,
+            },
+            WorkerCommand::StartTranscriptionBatch {
+                task_id: task_id.clone(),
+                input_paths: input_paths.clone(),
+                yap_mode: request.yap_mode,
+            },
+            "transcription task",
+        )
+        .await?;
+
+        Ok(BatchStartedResponse {
+            batch_id: task_id,
+            file_count: input_paths.len(),
+            input_paths,
         })
-        .transpose()?
-        .unwrap_or_else(|| {
-            SUPPORTED_VIDEO_EXTENSIONS
-                .iter()
-                .map(|extension| (*extension).to_string())
-                .collect()
-        });
-    let input_paths = resolve_input_paths(
-        request.input_dir.as_deref(),
-        request.input_paths.as_ref(),
-        &allowed_extensions,
-        "No .mp4/.mov files were selected.",
-    )?;
+    }
+    .await;
 
-    let task_id = Uuid::new_v4().to_string();
+    if let Err(ref error) = result {
+        eprintln!("[commands::start_transcription_batch] Error: {error}");
+    }
 
-    let worker_sender = ensure_worker_sender(app.clone(), state.inner().clone()).await?;
-    enqueue_task_command(
-        state.inner(),
-        &worker_sender,
-        TaskState {
-            task_id: task_id.clone(),
-            task_kind: TaskKind::Transcription,
-            status: TaskStatus::Queued,
-            jobs: create_task_jobs(&input_paths),
-            summary: None,
-        },
-        WorkerCommand::StartTranscriptionBatch {
-            task_id: task_id.clone(),
-            input_paths: input_paths.clone(),
-            yap_mode: request.yap_mode,
-        },
-        "transcription task",
-    )
-    .await?;
-
-    Ok(BatchStartedResponse {
-        batch_id: task_id,
-        file_count: input_paths.len(),
-        input_paths,
-    })
+    result
 }
 
 #[tauri::command]
@@ -1140,60 +1158,69 @@ pub async fn start_flag_batch(
     state: State<'_, AppState>,
     request: StartFlagBatchRequest,
 ) -> Result<BatchStartedResponse, String> {
-    let allowed_extensions = request
-        .allowed_extensions
-        .map(|extensions| {
-            validate_allowed_extensions(&extensions, &SUPPORTED_SUBTITLE_EXTENSIONS, "subtitle")
-        })
-        .transpose()?
-        .unwrap_or_else(|| vec![".srt".to_string()]);
-    let input_paths = resolve_input_paths(
-        request.input_dir.as_deref(),
-        request.input_paths.as_ref(),
-        &allowed_extensions,
-        "No .srt files were selected.",
-    )?;
+    let result = async {
+        let allowed_extensions = request
+            .allowed_extensions
+            .map(|extensions| {
+                validate_allowed_extensions(&extensions, &SUPPORTED_SUBTITLE_EXTENSIONS, "subtitle")
+            })
+            .transpose()?
+            .unwrap_or_else(|| vec![".srt".to_string()]);
+        let input_paths = resolve_input_paths(
+            request.input_dir.as_deref(),
+            request.input_paths.as_ref(),
+            &allowed_extensions,
+            "No .srt files were selected.",
+        )?;
 
-    let mut settings = read_or_initialize_moderation_settings(&app)?;
-    apply_flag_run_overrides(&mut settings, request.engine, request.analysis_strategy)?;
-    validate_moderation_settings(&settings)?;
-    let agent_executable_path = if analysis_agents::is_analysis_agent(&settings.engine) {
-        Some(
-            analysis_agents::resolve_agent_executable(&settings.engine)?
-                .to_string_lossy()
-                .to_string(),
+        let mut settings = read_or_initialize_moderation_settings(&app)?;
+        apply_flag_run_overrides(&mut settings, request.engine, request.analysis_strategy)?;
+        validate_moderation_settings(&settings)?;
+        let agent_executable_path = if analysis_agents::is_analysis_agent(&settings.engine) {
+            Some(
+                analysis_agents::resolve_agent_executable(&settings.engine)?
+                    .to_string_lossy()
+                    .to_string(),
+            )
+        } else {
+            None
+        };
+        let task_id = Uuid::new_v4().to_string();
+
+        let worker_sender = ensure_worker_sender(app.clone(), state.inner().clone()).await?;
+        enqueue_task_command(
+            state.inner(),
+            &worker_sender,
+            TaskState {
+                task_id: task_id.clone(),
+                task_kind: TaskKind::Flag,
+                status: TaskStatus::Queued,
+                jobs: create_task_jobs(&input_paths),
+                summary: None,
+            },
+            WorkerCommand::StartFlagBatch {
+                agent_executable_path,
+                task_id: task_id.clone(),
+                input_paths: input_paths.clone(),
+                settings,
+            },
+            "flag task",
         )
-    } else {
-        None
-    };
-    let task_id = Uuid::new_v4().to_string();
+        .await?;
 
-    let worker_sender = ensure_worker_sender(app.clone(), state.inner().clone()).await?;
-    enqueue_task_command(
-        state.inner(),
-        &worker_sender,
-        TaskState {
-            task_id: task_id.clone(),
-            task_kind: TaskKind::Flag,
-            status: TaskStatus::Queued,
-            jobs: create_task_jobs(&input_paths),
-            summary: None,
-        },
-        WorkerCommand::StartFlagBatch {
-            agent_executable_path,
-            task_id: task_id.clone(),
-            input_paths: input_paths.clone(),
-            settings,
-        },
-        "flag task",
-    )
-    .await?;
+        Ok(BatchStartedResponse {
+            batch_id: task_id,
+            file_count: input_paths.len(),
+            input_paths,
+        })
+    }
+    .await;
 
-    Ok(BatchStartedResponse {
-        batch_id: task_id,
-        file_count: input_paths.len(),
-        input_paths,
-    })
+    if let Err(ref error) = result {
+        eprintln!("[commands::start_flag_batch] Error: {error}");
+    }
+
+    result
 }
 
 #[tauri::command]
@@ -1202,44 +1229,53 @@ pub async fn start_cut_job(
     state: State<'_, AppState>,
     request: StartCutJobRequest,
 ) -> Result<CutJobStartedResponse, String> {
-    ensure_supported_cut_output_mode(&request.output_mode)?;
-    ensure_supported_compression_preset(&request.compression_preset)?;
-    if request.ranges.is_empty() {
-        return Err("Cut job requires at least one range.".to_string());
+    let result = async {
+        ensure_supported_cut_output_mode(&request.output_mode)?;
+        ensure_supported_compression_preset(&request.compression_preset)?;
+        if request.ranges.is_empty() {
+            return Err("Cut job requires at least one range.".to_string());
+        }
+        validate_cut_ranges(&request.ranges)?;
+        let video_path = validate_preview_video_path(&request.video_path)?;
+        let canonical_video_path = video_path.to_string_lossy().to_string();
+
+        let task_id = Uuid::new_v4().to_string();
+        let input_paths = vec![canonical_video_path.clone()];
+
+        let worker_sender = ensure_worker_sender(app.clone(), state.inner().clone()).await?;
+        enqueue_task_command(
+            state.inner(),
+            &worker_sender,
+            TaskState {
+                task_id: task_id.clone(),
+                task_kind: TaskKind::Cut,
+                status: TaskStatus::Queued,
+                jobs: create_task_jobs(&input_paths),
+                summary: None,
+            },
+            WorkerCommand::StartCutJob {
+                task_id: task_id.clone(),
+                video_path: canonical_video_path.clone(),
+                ranges: request.ranges,
+                output_mode: request.output_mode,
+                compression_preset: request.compression_preset,
+            },
+            "cut task",
+        )
+        .await?;
+
+        Ok(CutJobStartedResponse {
+            task_id,
+            video_path: canonical_video_path,
+        })
     }
-    validate_cut_ranges(&request.ranges)?;
-    let video_path = validate_preview_video_path(&request.video_path)?;
-    let canonical_video_path = video_path.to_string_lossy().to_string();
+    .await;
 
-    let task_id = Uuid::new_v4().to_string();
-    let input_paths = vec![canonical_video_path.clone()];
+    if let Err(ref error) = result {
+        eprintln!("[commands::start_cut_job] Error: {error}");
+    }
 
-    let worker_sender = ensure_worker_sender(app.clone(), state.inner().clone()).await?;
-    enqueue_task_command(
-        state.inner(),
-        &worker_sender,
-        TaskState {
-            task_id: task_id.clone(),
-            task_kind: TaskKind::Cut,
-            status: TaskStatus::Queued,
-            jobs: create_task_jobs(&input_paths),
-            summary: None,
-        },
-        WorkerCommand::StartCutJob {
-            task_id: task_id.clone(),
-            video_path: canonical_video_path.clone(),
-            ranges: request.ranges,
-            output_mode: request.output_mode,
-            compression_preset: request.compression_preset,
-        },
-        "cut task",
-    )
-    .await?;
-
-    Ok(CutJobStartedResponse {
-        task_id,
-        video_path: canonical_video_path,
-    })
+    result
 }
 
 #[tauri::command]

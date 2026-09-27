@@ -24,6 +24,7 @@ import {
   createBoundedEventBuffer,
   drainBoundedEventBuffer,
 } from "@/features/shared/bounded-event-buffer";
+import { toErrorMessage } from "@/lib/errors";
 
 const MAX_PRE_REGISTRATION_BATCH_EVENTS = 256;
 
@@ -105,9 +106,9 @@ export const useBatchController = () => {
       if (disposed) {
         return;
       }
-
+      console.error("[useBatchController] subscribeToBatchEvents failed:", error);
       dispatch({
-        payload: error instanceof Error ? error.message : "Failed to subscribe to worker events.",
+        payload: toErrorMessage(error, "Failed to subscribe to worker events."),
         type: "start_batch_error",
       });
     });
@@ -203,10 +204,11 @@ export const useBatchController = () => {
         });
       }
     } catch (error: unknown) {
+      console.error("[useBatchController] startBatch failed:", error);
       registeredBatchIdsRef.current.clear();
       preRegistrationEventsRef.current = clearBoundedEventBuffer(preRegistrationEventsRef.current);
       dispatch({
-        payload: error instanceof Error ? error.message : "Unable to start batch.",
+        payload: toErrorMessage(error, "Unable to start batch."),
         type: "start_batch_error",
       });
     } finally {
@@ -237,8 +239,9 @@ export const useBatchController = () => {
         type: "start_batch_error",
       });
     } catch (error: unknown) {
+      console.error("[useBatchController] cancelBatch failed:", error);
       dispatch({
-        payload: error instanceof Error ? error.message : "Unable to cancel batch.",
+        payload: toErrorMessage(error, "Unable to cancel batch."),
         type: "start_batch_error",
       });
     }

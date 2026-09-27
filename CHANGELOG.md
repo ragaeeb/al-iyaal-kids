@@ -1,3 +1,10 @@
+# [1.5.0](https://github.com/ragaeeb/al-iyaal-kids/compare/v1.4.0...v1.5.0) (2026-09-27)
+
+
+### Features
+
+* **recovery:** Add self-recovery for missing dependencies ([#25](https://github.com/ragaeeb/al-iyaal-kids/issues/25)) ([3c856df](https://github.com/ragaeeb/al-iyaal-kids/commit/3c856df378c0de5762c360a7660e2ac1536b2880))
+
 # [1.4.0](https://github.com/ragaeeb/al-iyaal-kids/compare/v1.3.0...v1.4.0) (2026-08-29)
 
 
